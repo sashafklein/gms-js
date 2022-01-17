@@ -4,22 +4,31 @@
   "description": "A vanilla JS library for easy Lightning payments",
   "main": "build/index.js",
   "scripts": {
-    "css:build": "node ./scripts/build-css.js",
-    "css:watch": "node ./scripts/watch-css.js",
-    "js:build": "rollup index.js --file build/index.js --format iife --name 'GMS'",
-    "js:watch": "rollup index.js -w --file build/index.js --format iife --name 'GMS'",
-    "watch": "node ./scripts/watch.js",
-    "start": "http-server --port 3000"
+    "watch": "webpack --watch --mode development --config webpack.config.js",
+    "build": "webpack --mode production --config webpack.config.js",
+    "start": "http-server --port 3000",
+    "test": "jest"
   },
   "author": "Sasha Klein",
   "license": "ISC",
   "devDependencies": {
-    "@babel/core": "^7.16.5",
     "@babel/preset-env": "^7.16.5",
+    "@testing-library/dom": "^8.11.1",
+    "@testing-library/user-event": "^13.5.0",
+    "babel-jest": "^27.4.5",
+    "css-loader": "^6.5.1",
     "eslint": "^8.5.0",
     "http-server": "^14.0.0",
-    "rollup": "^2.61.1",
-    "sass": "^1.45.1"
+    "jest": "^27.4.5",
+    "jest-canvas-mock": "^2.3.1",
+    "sass": "^1.45.1",
+    "sass-loader": "^12.4.0",
+    "style-loader": "^3.3.1",
+    "webpack": "^5.65.0",
+    "webpack-cli": "^4.9.1"
   },
-  "dependencies": {}
+  "dependencies": {
+    "axios": "^0.24.0",
+    "qrcode": "^1.5.0"
+  }
 }

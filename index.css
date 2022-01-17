@@ -1,0 +1,100 @@
+section {
+  width: 100vw;
+}
+
+.container {
+  height: 100%;
+  padding: 150px 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.demo h1 {
+  margin: 20px 0;
+  font-weight: bold;
+  font-size: 60px;
+}
+
+.demo h2 {
+  font-size: 35px;
+}
+
+section.dark {
+  background-color: #02021c;
+  color: white;
+}
+
+section.light {
+  background-color: white;
+  color: black;
+}
+
+.content {
+  margin-top: 40px;
+  width: 100%;
+}
+
+header {
+  height: 100px;
+  padding: 0 40px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #050c3e;
+  color: white;
+}
+
+a.logo {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  font-style: italic;
+  font-weight: bold;
+  text-decoration: none;
+  color: white;
+  transition: color 1s ease;
+}
+
+a.logo:after {
+  content: url("src/bolt.svg");
+  width: 20px;
+  margin-top: 2px;
+  margin-left: 15px;
+}
+
+a.logo:hover {
+  color: #fffbec;
+}
+
+.checkbox-container {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  margin: 20px 0;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 20px;
+  color: white;
+  margin-bottom: 40px;
+}
+
+.checkbox {
+  width: 20px;
+  height: 20px;
+  margin-right: 20px;
+  border: 2px solid white;
+  border-radius: 5px;
+}
+
+.checkbox.ticked {
+  background-color: white;
+}
+
+.inline {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+}

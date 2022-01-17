@@ -12,5 +12,19 @@ module.exports = {
   globals: {
     module: "readonly",
     gms: "writeable",
+    require: "readonly",
+    __dirname: "readonly",
+
+    // Jest
+    test: "readonly",
+    it: "readonly",
+    describe: "readonly",
+    xit: "readonly",
+    xdescribe: "readonly",
+    beforeEach: "readonly",
+    afterEach: "readonly",
+    expect: "readonly",
+    jest: "readonly",
+    process: "readonly",
   },
 };

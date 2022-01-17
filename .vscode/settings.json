@@ -1,0 +1,6 @@
+{
+  "files.exclude": {
+    "**/*.html": true,
+    "coverage/**": true
+  }
+}

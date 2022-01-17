@@ -1,6 +1,5 @@
 const fs = require("fs");
 const rollup = require("rollup");
-const server = require("http-server");
 
 const config = require("./rollup-config");
 

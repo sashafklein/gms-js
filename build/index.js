@@ -1,519 +1,1038 @@
-(function () {
-  'use strict';
-
-  const defaults = {
-    service: "STRIKE",
-    amount: 0,
-    note: "",
-  };
-
-  const parseSettings = (element) => {
-    const settingsString = element.getAttribute("data-settings") || "{}";
-
-    let settings;
-    try {
-      settings = JSON.parse(settingsString);
-    } catch (err) {
-      throw new Error(
-        `GimmeSats -- Failed to parse element settings. Make sure they are in JSON format.
-          Element: ${element}
-          Error: ${err}`
-      );
-    }
-
-    return settings || {};
-  };
-
-  const stages = ["AMOUNT_INPUT", "NOTE_INPUT", "INVOICE", "PAID"];
-
-  const isDescendant = (child, parentClass) => {
-    let node = child.parentNode;
-    while (node != null) {
-      if (node.classList && node.classList.contains(parentClass)) {
-        return true;
-      }
-      node = node.parentNode;
-    }
-    return false;
-  };
-
-  const element = (klass, innerHTML = "", type = "div") => {
-    const el = document.createElement(type);
-    el.classList.add(klass);
-    el.innerHTML = innerHTML;
-    return el;
-  };
-
-  const actionGroup = (primary, secondary) => {
-    let pri;
-    let sec;
-
-    const group = document.createElement("div");
-    group.classList.add("gms-modal-actions");
-
-    if (primary) {
-      pri = document.createElement("button");
-      pri.classList.add("gms-button");
-      pri.classList.add("gms-button--med");
-      pri.disabled = primary.disabled;
-      pri.innerHTML = primary.text;
-      pri.onclick = primary.onClick;
-      group.append(pri);
-    }
-
-    if (secondary) {
-      sec = document.createElement("button");
-      sec.classList.add("gms-button");
-      sec.classList.add("gms-button--light");
-      sec.disabled = secondary.disabled;
-      sec.innerHTML = secondary.text;
-      sec.onclick = secondary.onClick;
-      group.append(sec);
-    }
-
-    return group;
-  };
-
-  const modalContent = (headerContent, bodyContent, makeActionObjects) => {
-    const content = element("gms-modal-content");
-    const header = element("gms-modal-header", headerContent);
-    const body = element("gms-modal-body", bodyContent);
-    const actions = actionGroup(...makeActionObjects({ header, body }));
-
-    content.appendChild(header);
-    content.appendChild(body);
-    content.appendChild(actions);
-
-    return { content, header, body, actions };
-  };
-
-  const amountInput = (settings) => {
-    const { amount, amountIsFixed, to, displayName } = settings;
-
-    if (amountIsFixed && !amount) {
-      throw new Error(
-        "GimmeSats -- Bad settings: 'amountIsFixed' was set to true with empty amount."
-      );
-    }
-
-    const bodyContent = `
-      <h2>${amountIsFixed ? `$${amount.toFixed(2)}` : "Enter an amount"}</h2>
-      ${
-        amountIsFixed
-          ? ""
-          : `
-        <div class="gms-modal-row" style='margin-left: -20px'>
-          <h2 style="margin-right: 10px">$</h2>
-          <input
-            type="number"
-            class="gms-amount-input"
-            value=${amount.toFixed(2)}
-          />
-        </div>`
-      }
-    `;
-
-    const makeActionObjects = ({ body }) => {
-      const input = body.getElementsByClassName("gms-amount-input")[0];
-      return [
-        {
-          text: "Next",
-          disabled: !amount,
-          onClick: () => {
-            gms.update({
-              amount: parseFloat(input.value),
-              stage: gms.nextStage(),
-            });
-          },
-        },
-        {
-          text: "Cancel",
-          onClick: () => gms.close(),
-        },
-      ];
-    };
-
-    const { content, body, actions } = modalContent(
-      `<h1>Pay ${displayName || to}</h1>`,
-      bodyContent,
-      makeActionObjects
-    );
-    const input = body.getElementsByClassName("gms-amount-input")[0];
-
-    const handleNumInput = (event) => {
-      const { target } = event;
-      // Format number appropriately
-      const cleaned = parseFloat(target.value).toFixed(2);
-
-      if (cleaned !== target.value) {
-        target.value = cleaned;
-      }
-
-      const primary = actions.children[0];
-      primary.disabled = !(parseFloat(cleaned) > 0);
-    };
-
-    input.oninput = handleNumInput;
-    return content;
-  };
-
-  class BaseApi {
-    static secondsToExpireEarly = 2;
-
-    _path = (subpath) => [this._basePath(), subpath].join("/");
-
-    _invoice = () => {
-      return gms.invoice;
-    };
-
-    _settings = () => {
-      return gms.settings;
-    };
-
-    _basePath = () => {
-      this._implementError("basePath");
-      return "";
-    };
-
-    _implementError = (methodName) => {
-      throw new Error(
-        `GimmeSats -- Not Implemented -- ${methodName} method must be defined in BaseApi subclasses.`
-      );
-    };
-
-    // eslint-disable-next-line
-    getInvoice = (overload) => {
-      this._implementError("getInvoice");
-      return Promise.resolve(this._invoice());
-    };
-
-    // eslint-disable-next-line
-    checkForPayment = (overload) => {
-      this._implementError("checkForPayment");
-      return Promise.resolve(this._invoice());
-    };
-  }
-
-  class Strike extends BaseApi {
-    _basePath = () => "https://api.zaphq.io/api/v0.4/public";
-
-    getInvoice = async () => {
-      const settings = this._settings();
-      const { to, note } = settings;
-      const amount = settings.amount;
-      const includeOnchainAddress = amount >= 10;
-      const body = {
-        description: note,
-        includeOnchainAddress,
-        amount: {
-          currency: "USD",
-          amount: amount.toFixed(2),
-        },
-      };
-
-      console.log("BEFORE");
-      const resp = await fetch(this._path(`users/${to}/pay`), {
-        method: "POST",
-        body: body,
-      });
-      console.log("AFTER", resp);
-      const data = await resp.json();
-      console.log("BOOYAH", data);
-
-      return Promise.resolve({
-        lnInvoice: data.lnInvoice,
-        secondsLeft: data.expirySecond - BaseApi.secondsToExpireEarly,
-        btcInvoice: data.onchainAddress,
-        invoiceId: data.quoteId,
-      });
-    };
-
-    checkForPayment = async () => {
-      const resp = await fetch(
-        this._path(`receive/${this._invoice().invoiceId}`)
-      );
-      const data = await resp.json();
-
-      return Promise.resolve({
-        ...this._invoice(),
-        secondsLeft: data.expirySecond - BaseApi.secondsToExpireEarly,
-        status: data.result === "PAID" ? "PAID" : undefined,
-      });
-    };
-  }
-
-  const APIs = {
-    STRIKE: Strike,
-  };
-
-  class API {
-    constructor() {
-      this.api = API.getInstance();
-    }
-
-    getInvoiceAndUpdateApp = () => {
-      gms.update({ stage: "LOADING" });
-      return this.api.getInvoice().then((invoice) => {
-        gms.invoice = invoice;
-        gms.update({
-          settings: { ...this.context.settings, stage: "INVOICE" },
-        });
-      });
-    };
-
-    checkForPaymentAndUpdateApp = () => {
-      this.api.checkForPayment().then((invoice) => {
-        let stage = gms.settings.stage;
-        if (invoice.secondsLeft <= 0) {
-          stage = "EXPIRED";
-        }
-
-        if (invoice.status === "PAID") {
-          stage = "PAID";
-        }
-
-        this.invoice = invoice;
-        this.update({ stage });
-        // TODO: Fix this
-        // this.actions.onPayment(newContext);
-      });
-    };
-
-    static getInstance = () => {
-      const { service } = gms.settings;
-
-      const ApiClass = APIs[service];
-
-      if (!ApiClass) {
-        throw new Error(`GimmeSats -- No such API service: ${service}`);
-      }
-
-      const api = new ApiClass();
-
-      return api;
-    };
-  }
-
-  const noteInput = (settings) => {
-    const { to, displayName, note, amount, amountIsFixed, noteIsFixed } =
-      settings;
-
-    if (noteIsFixed && !note?.length) {
-      throw new Error(
-        "GimmeSats -- Bad settings: 'noteIsFixed' was set to true with empty note."
-      );
-    }
-
-    const api = new API();
-
-    const bodyContent = `
-    ${
-      noteIsFixed
-        ? `
-          <h2>$${(amount || 0).toFixed(2)}</h2>
-          <p>${note}</p>
-        `
-        : `
-          <div class="gms-modal-row">
-            <h2 style="margin-right: 10px">$</h2>
-            <h1 class="gms-large-text">${(amount || 0).toFixed(2)}</h1>
-          </div>
-          <h2>Add a note</h2>
-          <textarea
-            class="gms-note-input"
-            value=${note}
-          />`
-    }
-    `;
-
-    const makeActionObjects = ({ body }) => {
-      const input = body.getElementsByTagName("textarea")[0];
-      return [
-        {
-          onClick: () => {
-            gms.settings = { note: input.value };
-            api.getInvoiceAndUpdateApp();
-          },
-          disabled: !input.value.length,
-          text: "Get invoice",
-        },
-        {
-          onClick: amountIsFixed
-            ? () => gms.close()
-            : () => gms.update({ stage: "AMOUNT_INPUT" }),
-          text: amountIsFixed ? "Cancel" : "Back",
-        },
-      ];
-    };
-
-    const { content } = modalContent(
-      `<h1>Pay ${displayName || to}</h1>`,
-      bodyContent,
-      makeActionObjects
-    );
-
-    return content;
-  };
-
-  class GMS {
-    static requiredSettings = ["to", "service"];
-
-    constructor(root, card, globalSettings) {
-      this.root = root;
-      this.card = card;
-      this.invoice = {};
-      this._globalSettings = {
-        ...defaults,
-        ...globalSettings,
-      };
-      this.settings = {};
-    }
-
-    render() {
-      console.log("RENDERING", this.settings);
-      const show = !!this.settings.stage;
-
-      if (show) {
-        this.root.classList.add("gms--show");
-      } else {
-        this.root.classList.remove("gms--show");
-      }
-
-      if (!show) {
-        return;
-      }
-
-      const contentFunction = {
-        AMOUNT_INPUT: amountInput,
-        NOTE_INPUT: noteInput,
-      }[this.settings.stage];
-
-      if (contentFunction) {
-        const cardChild = contentFunction(this.settings);
-        this.card.innerHTML = "";
-        this.card.prepend(cardChild);
-      } else {
-        throw new Error(
-          `GimmeSats -- No content function found for stage: ${this.settings.stage}.`
-        );
-      }
-    }
-
-    update(newSettings, overwrite = false) {
-      this.settings = overwrite
-        ? newSettings
-        : { ...this.settings, ...newSettings };
-      this.render();
-    }
-
-    close() {
-      this.update({}, true);
-    }
-
-    nextStage() {
-      return stages[stages.indexOf(this.settings.stage) + 1];
-    }
-
-    prevStage() {
-      return stages[stages.indexOf(this.settings.stage) + 1];
-    }
-
-    trigger = (triggerSettings = {}) => {
-      const settings = {
-        ...this._globalSettings,
-        ...triggerSettings,
-        stage: "AMOUNT_INPUT",
-      };
-
-      const missing = GMS.requiredSettings.filter((key) => !settings[key]);
-
-      if (missing.length) {
-        throw new Error(
-          `GimmeSats -- Missing required settings: '${missing.join("', '")}'`
-        );
-      }
-
-      this.update(settings, true);
-    };
-  }
-
-  function setup (GMS) {
-    const root = document.getElementById("gms-root");
-
-    if (!root) {
-      throw new Error("GimmeSats -- No element found with ID 'gms-root'.");
-    }
-
-    const globalSettings = parseSettings(root);
-
-    const darkThemes = ["dark-blue"];
-    const lightThemes = ["white"];
-    const themes = [...darkThemes, ...lightThemes];
-    const classes = [];
-
-    root.classList.forEach((klass) => {
-      classes.push(klass);
-    });
-
-    const theme = classes.filter(
-      (klass) =>
-        klass.includes("gms-theme--") && themes.includes(klass.split("--")[1])
-    )[0];
-
-    if (!theme) {
-      throw new Error("GimmeSats -- Root element requires a theme.");
-    }
-
-    root.classList.add(
-      `gms-theme--is-${
-      darkThemes.includes(theme.split("--")[1]) ? "dark" : "light"
-    }`
-    );
-
-    if (root.children.length > 1) {
-      throw new Error(
-        "GimmeSats -- Root element cannot have more than one child."
-      );
-    }
-
-    const container = document.createElement("div");
-    container.classList.add("gms-modal-window");
-
-    const screen = document.createElement("div");
-    screen.classList.add("gms-modal-screen");
-
-    const card = document.createElement("div");
-    card.classList.add("gms-modal-card");
-
-    screen.prepend(card);
-    container.prepend(screen);
-    root.prepend(container);
-
-    window.gms = new GMS(root, card, globalSettings);
-
-    // If the click was not within the card, close the modal.
-    const closeModal = (event) => {
-      if (!isDescendant(event.target, "gms-modal-card")) {
-        gms.close();
-      }
-    };
-
-    screen.onclick = closeModal;
-
-    const triggers = document.getElementsByClassName("gms-button");
-
-    for (let i = 0; i < triggers.length; i++) {
-      const trigger = triggers[i];
-      const settings = parseSettings(trigger);
-
-      trigger.onclick = () => {
-        window.gms.trigger(settings);
-      };
-    }
-  }
-
-  window.onload = function () {
-    setup(GMS);
-  };
-
-})();
+/*
+ * ATTENTION: The "eval" devtool has been used (maybe by default in mode: "development").
+ * This devtool is neither made for production nor for readable output files.
+ * It uses "eval()" calls to create a separate source file in the browser devtools.
+ * If you are trying to read the output file, select a different devtool (https://webpack.js.org/configuration/devtool/)
+ * or disable the default devtool with "devtool: false".
+ * If you are looking for production-ready output files, see mode: "production" (https://webpack.js.org/configuration/mode/).
+ */
+(function webpackUniversalModuleDefinition(root, factory) {
+	if(typeof exports === 'object' && typeof module === 'object')
+		module.exports = factory();
+	else if(typeof define === 'function' && define.amd)
+		define([], factory);
+	else {
+		var a = factory();
+		for(var i in a) (typeof exports === 'object' ? exports : root)[i] = a[i];
+	}
+})(self, function() {
+return /******/ (() => { // webpackBootstrap
+/******/ 	var __webpack_modules__ = ({
+
+/***/ "./node_modules/axios/index.js":
+/*!*************************************!*\
+  !*** ./node_modules/axios/index.js ***!
+  \*************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("module.exports = __webpack_require__(/*! ./lib/axios */ \"./node_modules/axios/lib/axios.js\");\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/index.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/adapters/xhr.js":
+/*!************************************************!*\
+  !*** ./node_modules/axios/lib/adapters/xhr.js ***!
+  \************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\nvar settle = __webpack_require__(/*! ./../core/settle */ \"./node_modules/axios/lib/core/settle.js\");\nvar cookies = __webpack_require__(/*! ./../helpers/cookies */ \"./node_modules/axios/lib/helpers/cookies.js\");\nvar buildURL = __webpack_require__(/*! ./../helpers/buildURL */ \"./node_modules/axios/lib/helpers/buildURL.js\");\nvar buildFullPath = __webpack_require__(/*! ../core/buildFullPath */ \"./node_modules/axios/lib/core/buildFullPath.js\");\nvar parseHeaders = __webpack_require__(/*! ./../helpers/parseHeaders */ \"./node_modules/axios/lib/helpers/parseHeaders.js\");\nvar isURLSameOrigin = __webpack_require__(/*! ./../helpers/isURLSameOrigin */ \"./node_modules/axios/lib/helpers/isURLSameOrigin.js\");\nvar createError = __webpack_require__(/*! ../core/createError */ \"./node_modules/axios/lib/core/createError.js\");\nvar defaults = __webpack_require__(/*! ../defaults */ \"./node_modules/axios/lib/defaults.js\");\nvar Cancel = __webpack_require__(/*! ../cancel/Cancel */ \"./node_modules/axios/lib/cancel/Cancel.js\");\n\nmodule.exports = function xhrAdapter(config) {\n  return new Promise(function dispatchXhrRequest(resolve, reject) {\n    var requestData = config.data;\n    var requestHeaders = config.headers;\n    var responseType = config.responseType;\n    var onCanceled;\n    function done() {\n      if (config.cancelToken) {\n        config.cancelToken.unsubscribe(onCanceled);\n      }\n\n      if (config.signal) {\n        config.signal.removeEventListener('abort', onCanceled);\n      }\n    }\n\n    if (utils.isFormData(requestData)) {\n      delete requestHeaders['Content-Type']; // Let the browser set it\n    }\n\n    var request = new XMLHttpRequest();\n\n    // HTTP basic authentication\n    if (config.auth) {\n      var username = config.auth.username || '';\n      var password = config.auth.password ? unescape(encodeURIComponent(config.auth.password)) : '';\n      requestHeaders.Authorization = 'Basic ' + btoa(username + ':' + password);\n    }\n\n    var fullPath = buildFullPath(config.baseURL, config.url);\n    request.open(config.method.toUpperCase(), buildURL(fullPath, config.params, config.paramsSerializer), true);\n\n    // Set the request timeout in MS\n    request.timeout = config.timeout;\n\n    function onloadend() {\n      if (!request) {\n        return;\n      }\n      // Prepare the response\n      var responseHeaders = 'getAllResponseHeaders' in request ? parseHeaders(request.getAllResponseHeaders()) : null;\n      var responseData = !responseType || responseType === 'text' ||  responseType === 'json' ?\n        request.responseText : request.response;\n      var response = {\n        data: responseData,\n        status: request.status,\n        statusText: request.statusText,\n        headers: responseHeaders,\n        config: config,\n        request: request\n      };\n\n      settle(function _resolve(value) {\n        resolve(value);\n        done();\n      }, function _reject(err) {\n        reject(err);\n        done();\n      }, response);\n\n      // Clean up request\n      request = null;\n    }\n\n    if ('onloadend' in request) {\n      // Use onloadend if available\n      request.onloadend = onloadend;\n    } else {\n      // Listen for ready state to emulate onloadend\n      request.onreadystatechange = function handleLoad() {\n        if (!request || request.readyState !== 4) {\n          return;\n        }\n\n        // The request errored out and we didn't get a response, this will be\n        // handled by onerror instead\n        // With one exception: request that using file: protocol, most browsers\n        // will return status as 0 even though it's a successful request\n        if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {\n          return;\n        }\n        // readystate handler is calling before onerror or ontimeout handlers,\n        // so we should call onloadend on the next 'tick'\n        setTimeout(onloadend);\n      };\n    }\n\n    // Handle browser request cancellation (as opposed to a manual cancellation)\n    request.onabort = function handleAbort() {\n      if (!request) {\n        return;\n      }\n\n      reject(createError('Request aborted', config, 'ECONNABORTED', request));\n\n      // Clean up request\n      request = null;\n    };\n\n    // Handle low level network errors\n    request.onerror = function handleError() {\n      // Real errors are hidden from us by the browser\n      // onerror should only fire if it's a network error\n      reject(createError('Network Error', config, null, request));\n\n      // Clean up request\n      request = null;\n    };\n\n    // Handle timeout\n    request.ontimeout = function handleTimeout() {\n      var timeoutErrorMessage = config.timeout ? 'timeout of ' + config.timeout + 'ms exceeded' : 'timeout exceeded';\n      var transitional = config.transitional || defaults.transitional;\n      if (config.timeoutErrorMessage) {\n        timeoutErrorMessage = config.timeoutErrorMessage;\n      }\n      reject(createError(\n        timeoutErrorMessage,\n        config,\n        transitional.clarifyTimeoutError ? 'ETIMEDOUT' : 'ECONNABORTED',\n        request));\n\n      // Clean up request\n      request = null;\n    };\n\n    // Add xsrf header\n    // This is only done if running in a standard browser environment.\n    // Specifically not if we're in a web worker, or react-native.\n    if (utils.isStandardBrowserEnv()) {\n      // Add xsrf header\n      var xsrfValue = (config.withCredentials || isURLSameOrigin(fullPath)) && config.xsrfCookieName ?\n        cookies.read(config.xsrfCookieName) :\n        undefined;\n\n      if (xsrfValue) {\n        requestHeaders[config.xsrfHeaderName] = xsrfValue;\n      }\n    }\n\n    // Add headers to the request\n    if ('setRequestHeader' in request) {\n      utils.forEach(requestHeaders, function setRequestHeader(val, key) {\n        if (typeof requestData === 'undefined' && key.toLowerCase() === 'content-type') {\n          // Remove Content-Type if data is undefined\n          delete requestHeaders[key];\n        } else {\n          // Otherwise add header to the request\n          request.setRequestHeader(key, val);\n        }\n      });\n    }\n\n    // Add withCredentials to request if needed\n    if (!utils.isUndefined(config.withCredentials)) {\n      request.withCredentials = !!config.withCredentials;\n    }\n\n    // Add responseType to request if needed\n    if (responseType && responseType !== 'json') {\n      request.responseType = config.responseType;\n    }\n\n    // Handle progress if needed\n    if (typeof config.onDownloadProgress === 'function') {\n      request.addEventListener('progress', config.onDownloadProgress);\n    }\n\n    // Not all browsers support upload events\n    if (typeof config.onUploadProgress === 'function' && request.upload) {\n      request.upload.addEventListener('progress', config.onUploadProgress);\n    }\n\n    if (config.cancelToken || config.signal) {\n      // Handle cancellation\n      // eslint-disable-next-line func-names\n      onCanceled = function(cancel) {\n        if (!request) {\n          return;\n        }\n        reject(!cancel || (cancel && cancel.type) ? new Cancel('canceled') : cancel);\n        request.abort();\n        request = null;\n      };\n\n      config.cancelToken && config.cancelToken.subscribe(onCanceled);\n      if (config.signal) {\n        config.signal.aborted ? onCanceled() : config.signal.addEventListener('abort', onCanceled);\n      }\n    }\n\n    if (!requestData) {\n      requestData = null;\n    }\n\n    // Send the request\n    request.send(requestData);\n  });\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/adapters/xhr.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/axios.js":
+/*!*****************************************!*\
+  !*** ./node_modules/axios/lib/axios.js ***!
+  \*****************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./utils */ \"./node_modules/axios/lib/utils.js\");\nvar bind = __webpack_require__(/*! ./helpers/bind */ \"./node_modules/axios/lib/helpers/bind.js\");\nvar Axios = __webpack_require__(/*! ./core/Axios */ \"./node_modules/axios/lib/core/Axios.js\");\nvar mergeConfig = __webpack_require__(/*! ./core/mergeConfig */ \"./node_modules/axios/lib/core/mergeConfig.js\");\nvar defaults = __webpack_require__(/*! ./defaults */ \"./node_modules/axios/lib/defaults.js\");\n\n/**\n * Create an instance of Axios\n *\n * @param {Object} defaultConfig The default config for the instance\n * @return {Axios} A new instance of Axios\n */\nfunction createInstance(defaultConfig) {\n  var context = new Axios(defaultConfig);\n  var instance = bind(Axios.prototype.request, context);\n\n  // Copy axios.prototype to instance\n  utils.extend(instance, Axios.prototype, context);\n\n  // Copy context to instance\n  utils.extend(instance, context);\n\n  // Factory for creating new instances\n  instance.create = function create(instanceConfig) {\n    return createInstance(mergeConfig(defaultConfig, instanceConfig));\n  };\n\n  return instance;\n}\n\n// Create the default instance to be exported\nvar axios = createInstance(defaults);\n\n// Expose Axios class to allow class inheritance\naxios.Axios = Axios;\n\n// Expose Cancel & CancelToken\naxios.Cancel = __webpack_require__(/*! ./cancel/Cancel */ \"./node_modules/axios/lib/cancel/Cancel.js\");\naxios.CancelToken = __webpack_require__(/*! ./cancel/CancelToken */ \"./node_modules/axios/lib/cancel/CancelToken.js\");\naxios.isCancel = __webpack_require__(/*! ./cancel/isCancel */ \"./node_modules/axios/lib/cancel/isCancel.js\");\naxios.VERSION = (__webpack_require__(/*! ./env/data */ \"./node_modules/axios/lib/env/data.js\").version);\n\n// Expose all/spread\naxios.all = function all(promises) {\n  return Promise.all(promises);\n};\naxios.spread = __webpack_require__(/*! ./helpers/spread */ \"./node_modules/axios/lib/helpers/spread.js\");\n\n// Expose isAxiosError\naxios.isAxiosError = __webpack_require__(/*! ./helpers/isAxiosError */ \"./node_modules/axios/lib/helpers/isAxiosError.js\");\n\nmodule.exports = axios;\n\n// Allow use of default import syntax in TypeScript\nmodule.exports[\"default\"] = axios;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/axios.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/cancel/Cancel.js":
+/*!*************************************************!*\
+  !*** ./node_modules/axios/lib/cancel/Cancel.js ***!
+  \*************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * A `Cancel` is an object that is thrown when an operation is canceled.\n *\n * @class\n * @param {string=} message The message.\n */\nfunction Cancel(message) {\n  this.message = message;\n}\n\nCancel.prototype.toString = function toString() {\n  return 'Cancel' + (this.message ? ': ' + this.message : '');\n};\n\nCancel.prototype.__CANCEL__ = true;\n\nmodule.exports = Cancel;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/cancel/Cancel.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/cancel/CancelToken.js":
+/*!******************************************************!*\
+  !*** ./node_modules/axios/lib/cancel/CancelToken.js ***!
+  \******************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar Cancel = __webpack_require__(/*! ./Cancel */ \"./node_modules/axios/lib/cancel/Cancel.js\");\n\n/**\n * A `CancelToken` is an object that can be used to request cancellation of an operation.\n *\n * @class\n * @param {Function} executor The executor function.\n */\nfunction CancelToken(executor) {\n  if (typeof executor !== 'function') {\n    throw new TypeError('executor must be a function.');\n  }\n\n  var resolvePromise;\n\n  this.promise = new Promise(function promiseExecutor(resolve) {\n    resolvePromise = resolve;\n  });\n\n  var token = this;\n\n  // eslint-disable-next-line func-names\n  this.promise.then(function(cancel) {\n    if (!token._listeners) return;\n\n    var i;\n    var l = token._listeners.length;\n\n    for (i = 0; i < l; i++) {\n      token._listeners[i](cancel);\n    }\n    token._listeners = null;\n  });\n\n  // eslint-disable-next-line func-names\n  this.promise.then = function(onfulfilled) {\n    var _resolve;\n    // eslint-disable-next-line func-names\n    var promise = new Promise(function(resolve) {\n      token.subscribe(resolve);\n      _resolve = resolve;\n    }).then(onfulfilled);\n\n    promise.cancel = function reject() {\n      token.unsubscribe(_resolve);\n    };\n\n    return promise;\n  };\n\n  executor(function cancel(message) {\n    if (token.reason) {\n      // Cancellation has already been requested\n      return;\n    }\n\n    token.reason = new Cancel(message);\n    resolvePromise(token.reason);\n  });\n}\n\n/**\n * Throws a `Cancel` if cancellation has been requested.\n */\nCancelToken.prototype.throwIfRequested = function throwIfRequested() {\n  if (this.reason) {\n    throw this.reason;\n  }\n};\n\n/**\n * Subscribe to the cancel signal\n */\n\nCancelToken.prototype.subscribe = function subscribe(listener) {\n  if (this.reason) {\n    listener(this.reason);\n    return;\n  }\n\n  if (this._listeners) {\n    this._listeners.push(listener);\n  } else {\n    this._listeners = [listener];\n  }\n};\n\n/**\n * Unsubscribe from the cancel signal\n */\n\nCancelToken.prototype.unsubscribe = function unsubscribe(listener) {\n  if (!this._listeners) {\n    return;\n  }\n  var index = this._listeners.indexOf(listener);\n  if (index !== -1) {\n    this._listeners.splice(index, 1);\n  }\n};\n\n/**\n * Returns an object that contains a new `CancelToken` and a function that, when called,\n * cancels the `CancelToken`.\n */\nCancelToken.source = function source() {\n  var cancel;\n  var token = new CancelToken(function executor(c) {\n    cancel = c;\n  });\n  return {\n    token: token,\n    cancel: cancel\n  };\n};\n\nmodule.exports = CancelToken;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/cancel/CancelToken.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/cancel/isCancel.js":
+/*!***************************************************!*\
+  !*** ./node_modules/axios/lib/cancel/isCancel.js ***!
+  \***************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nmodule.exports = function isCancel(value) {\n  return !!(value && value.__CANCEL__);\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/cancel/isCancel.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/Axios.js":
+/*!**********************************************!*\
+  !*** ./node_modules/axios/lib/core/Axios.js ***!
+  \**********************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\nvar buildURL = __webpack_require__(/*! ../helpers/buildURL */ \"./node_modules/axios/lib/helpers/buildURL.js\");\nvar InterceptorManager = __webpack_require__(/*! ./InterceptorManager */ \"./node_modules/axios/lib/core/InterceptorManager.js\");\nvar dispatchRequest = __webpack_require__(/*! ./dispatchRequest */ \"./node_modules/axios/lib/core/dispatchRequest.js\");\nvar mergeConfig = __webpack_require__(/*! ./mergeConfig */ \"./node_modules/axios/lib/core/mergeConfig.js\");\nvar validator = __webpack_require__(/*! ../helpers/validator */ \"./node_modules/axios/lib/helpers/validator.js\");\n\nvar validators = validator.validators;\n/**\n * Create a new instance of Axios\n *\n * @param {Object} instanceConfig The default config for the instance\n */\nfunction Axios(instanceConfig) {\n  this.defaults = instanceConfig;\n  this.interceptors = {\n    request: new InterceptorManager(),\n    response: new InterceptorManager()\n  };\n}\n\n/**\n * Dispatch a request\n *\n * @param {Object} config The config specific for this request (merged with this.defaults)\n */\nAxios.prototype.request = function request(config) {\n  /*eslint no-param-reassign:0*/\n  // Allow for axios('example/url'[, config]) a la fetch API\n  if (typeof config === 'string') {\n    config = arguments[1] || {};\n    config.url = arguments[0];\n  } else {\n    config = config || {};\n  }\n\n  config = mergeConfig(this.defaults, config);\n\n  // Set config.method\n  if (config.method) {\n    config.method = config.method.toLowerCase();\n  } else if (this.defaults.method) {\n    config.method = this.defaults.method.toLowerCase();\n  } else {\n    config.method = 'get';\n  }\n\n  var transitional = config.transitional;\n\n  if (transitional !== undefined) {\n    validator.assertOptions(transitional, {\n      silentJSONParsing: validators.transitional(validators.boolean),\n      forcedJSONParsing: validators.transitional(validators.boolean),\n      clarifyTimeoutError: validators.transitional(validators.boolean)\n    }, false);\n  }\n\n  // filter out skipped interceptors\n  var requestInterceptorChain = [];\n  var synchronousRequestInterceptors = true;\n  this.interceptors.request.forEach(function unshiftRequestInterceptors(interceptor) {\n    if (typeof interceptor.runWhen === 'function' && interceptor.runWhen(config) === false) {\n      return;\n    }\n\n    synchronousRequestInterceptors = synchronousRequestInterceptors && interceptor.synchronous;\n\n    requestInterceptorChain.unshift(interceptor.fulfilled, interceptor.rejected);\n  });\n\n  var responseInterceptorChain = [];\n  this.interceptors.response.forEach(function pushResponseInterceptors(interceptor) {\n    responseInterceptorChain.push(interceptor.fulfilled, interceptor.rejected);\n  });\n\n  var promise;\n\n  if (!synchronousRequestInterceptors) {\n    var chain = [dispatchRequest, undefined];\n\n    Array.prototype.unshift.apply(chain, requestInterceptorChain);\n    chain = chain.concat(responseInterceptorChain);\n\n    promise = Promise.resolve(config);\n    while (chain.length) {\n      promise = promise.then(chain.shift(), chain.shift());\n    }\n\n    return promise;\n  }\n\n\n  var newConfig = config;\n  while (requestInterceptorChain.length) {\n    var onFulfilled = requestInterceptorChain.shift();\n    var onRejected = requestInterceptorChain.shift();\n    try {\n      newConfig = onFulfilled(newConfig);\n    } catch (error) {\n      onRejected(error);\n      break;\n    }\n  }\n\n  try {\n    promise = dispatchRequest(newConfig);\n  } catch (error) {\n    return Promise.reject(error);\n  }\n\n  while (responseInterceptorChain.length) {\n    promise = promise.then(responseInterceptorChain.shift(), responseInterceptorChain.shift());\n  }\n\n  return promise;\n};\n\nAxios.prototype.getUri = function getUri(config) {\n  config = mergeConfig(this.defaults, config);\n  return buildURL(config.url, config.params, config.paramsSerializer).replace(/^\\?/, '');\n};\n\n// Provide aliases for supported request methods\nutils.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoData(method) {\n  /*eslint func-names:0*/\n  Axios.prototype[method] = function(url, config) {\n    return this.request(mergeConfig(config || {}, {\n      method: method,\n      url: url,\n      data: (config || {}).data\n    }));\n  };\n});\n\nutils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {\n  /*eslint func-names:0*/\n  Axios.prototype[method] = function(url, data, config) {\n    return this.request(mergeConfig(config || {}, {\n      method: method,\n      url: url,\n      data: data\n    }));\n  };\n});\n\nmodule.exports = Axios;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/Axios.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/InterceptorManager.js":
+/*!***********************************************************!*\
+  !*** ./node_modules/axios/lib/core/InterceptorManager.js ***!
+  \***********************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\n\nfunction InterceptorManager() {\n  this.handlers = [];\n}\n\n/**\n * Add a new interceptor to the stack\n *\n * @param {Function} fulfilled The function to handle `then` for a `Promise`\n * @param {Function} rejected The function to handle `reject` for a `Promise`\n *\n * @return {Number} An ID used to remove interceptor later\n */\nInterceptorManager.prototype.use = function use(fulfilled, rejected, options) {\n  this.handlers.push({\n    fulfilled: fulfilled,\n    rejected: rejected,\n    synchronous: options ? options.synchronous : false,\n    runWhen: options ? options.runWhen : null\n  });\n  return this.handlers.length - 1;\n};\n\n/**\n * Remove an interceptor from the stack\n *\n * @param {Number} id The ID that was returned by `use`\n */\nInterceptorManager.prototype.eject = function eject(id) {\n  if (this.handlers[id]) {\n    this.handlers[id] = null;\n  }\n};\n\n/**\n * Iterate over all the registered interceptors\n *\n * This method is particularly useful for skipping over any\n * interceptors that may have become `null` calling `eject`.\n *\n * @param {Function} fn The function to call for each interceptor\n */\nInterceptorManager.prototype.forEach = function forEach(fn) {\n  utils.forEach(this.handlers, function forEachHandler(h) {\n    if (h !== null) {\n      fn(h);\n    }\n  });\n};\n\nmodule.exports = InterceptorManager;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/InterceptorManager.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/buildFullPath.js":
+/*!******************************************************!*\
+  !*** ./node_modules/axios/lib/core/buildFullPath.js ***!
+  \******************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar isAbsoluteURL = __webpack_require__(/*! ../helpers/isAbsoluteURL */ \"./node_modules/axios/lib/helpers/isAbsoluteURL.js\");\nvar combineURLs = __webpack_require__(/*! ../helpers/combineURLs */ \"./node_modules/axios/lib/helpers/combineURLs.js\");\n\n/**\n * Creates a new URL by combining the baseURL with the requestedURL,\n * only when the requestedURL is not already an absolute URL.\n * If the requestURL is absolute, this function returns the requestedURL untouched.\n *\n * @param {string} baseURL The base URL\n * @param {string} requestedURL Absolute or relative URL to combine\n * @returns {string} The combined full path\n */\nmodule.exports = function buildFullPath(baseURL, requestedURL) {\n  if (baseURL && !isAbsoluteURL(requestedURL)) {\n    return combineURLs(baseURL, requestedURL);\n  }\n  return requestedURL;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/buildFullPath.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/createError.js":
+/*!****************************************************!*\
+  !*** ./node_modules/axios/lib/core/createError.js ***!
+  \****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar enhanceError = __webpack_require__(/*! ./enhanceError */ \"./node_modules/axios/lib/core/enhanceError.js\");\n\n/**\n * Create an Error with the specified message, config, error code, request and response.\n *\n * @param {string} message The error message.\n * @param {Object} config The config.\n * @param {string} [code] The error code (for example, 'ECONNABORTED').\n * @param {Object} [request] The request.\n * @param {Object} [response] The response.\n * @returns {Error} The created error.\n */\nmodule.exports = function createError(message, config, code, request, response) {\n  var error = new Error(message);\n  return enhanceError(error, config, code, request, response);\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/createError.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/dispatchRequest.js":
+/*!********************************************************!*\
+  !*** ./node_modules/axios/lib/core/dispatchRequest.js ***!
+  \********************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\nvar transformData = __webpack_require__(/*! ./transformData */ \"./node_modules/axios/lib/core/transformData.js\");\nvar isCancel = __webpack_require__(/*! ../cancel/isCancel */ \"./node_modules/axios/lib/cancel/isCancel.js\");\nvar defaults = __webpack_require__(/*! ../defaults */ \"./node_modules/axios/lib/defaults.js\");\nvar Cancel = __webpack_require__(/*! ../cancel/Cancel */ \"./node_modules/axios/lib/cancel/Cancel.js\");\n\n/**\n * Throws a `Cancel` if cancellation has been requested.\n */\nfunction throwIfCancellationRequested(config) {\n  if (config.cancelToken) {\n    config.cancelToken.throwIfRequested();\n  }\n\n  if (config.signal && config.signal.aborted) {\n    throw new Cancel('canceled');\n  }\n}\n\n/**\n * Dispatch a request to the server using the configured adapter.\n *\n * @param {object} config The config that is to be used for the request\n * @returns {Promise} The Promise to be fulfilled\n */\nmodule.exports = function dispatchRequest(config) {\n  throwIfCancellationRequested(config);\n\n  // Ensure headers exist\n  config.headers = config.headers || {};\n\n  // Transform request data\n  config.data = transformData.call(\n    config,\n    config.data,\n    config.headers,\n    config.transformRequest\n  );\n\n  // Flatten headers\n  config.headers = utils.merge(\n    config.headers.common || {},\n    config.headers[config.method] || {},\n    config.headers\n  );\n\n  utils.forEach(\n    ['delete', 'get', 'head', 'post', 'put', 'patch', 'common'],\n    function cleanHeaderConfig(method) {\n      delete config.headers[method];\n    }\n  );\n\n  var adapter = config.adapter || defaults.adapter;\n\n  return adapter(config).then(function onAdapterResolution(response) {\n    throwIfCancellationRequested(config);\n\n    // Transform response data\n    response.data = transformData.call(\n      config,\n      response.data,\n      response.headers,\n      config.transformResponse\n    );\n\n    return response;\n  }, function onAdapterRejection(reason) {\n    if (!isCancel(reason)) {\n      throwIfCancellationRequested(config);\n\n      // Transform response data\n      if (reason && reason.response) {\n        reason.response.data = transformData.call(\n          config,\n          reason.response.data,\n          reason.response.headers,\n          config.transformResponse\n        );\n      }\n    }\n\n    return Promise.reject(reason);\n  });\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/dispatchRequest.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/enhanceError.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/axios/lib/core/enhanceError.js ***!
+  \*****************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * Update an Error with the specified config, error code, and response.\n *\n * @param {Error} error The error to update.\n * @param {Object} config The config.\n * @param {string} [code] The error code (for example, 'ECONNABORTED').\n * @param {Object} [request] The request.\n * @param {Object} [response] The response.\n * @returns {Error} The error.\n */\nmodule.exports = function enhanceError(error, config, code, request, response) {\n  error.config = config;\n  if (code) {\n    error.code = code;\n  }\n\n  error.request = request;\n  error.response = response;\n  error.isAxiosError = true;\n\n  error.toJSON = function toJSON() {\n    return {\n      // Standard\n      message: this.message,\n      name: this.name,\n      // Microsoft\n      description: this.description,\n      number: this.number,\n      // Mozilla\n      fileName: this.fileName,\n      lineNumber: this.lineNumber,\n      columnNumber: this.columnNumber,\n      stack: this.stack,\n      // Axios\n      config: this.config,\n      code: this.code,\n      status: this.response && this.response.status ? this.response.status : null\n    };\n  };\n  return error;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/enhanceError.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/mergeConfig.js":
+/*!****************************************************!*\
+  !*** ./node_modules/axios/lib/core/mergeConfig.js ***!
+  \****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ../utils */ \"./node_modules/axios/lib/utils.js\");\n\n/**\n * Config-specific merge-function which creates a new config-object\n * by merging two configuration objects together.\n *\n * @param {Object} config1\n * @param {Object} config2\n * @returns {Object} New object resulting from merging config2 to config1\n */\nmodule.exports = function mergeConfig(config1, config2) {\n  // eslint-disable-next-line no-param-reassign\n  config2 = config2 || {};\n  var config = {};\n\n  function getMergedValue(target, source) {\n    if (utils.isPlainObject(target) && utils.isPlainObject(source)) {\n      return utils.merge(target, source);\n    } else if (utils.isPlainObject(source)) {\n      return utils.merge({}, source);\n    } else if (utils.isArray(source)) {\n      return source.slice();\n    }\n    return source;\n  }\n\n  // eslint-disable-next-line consistent-return\n  function mergeDeepProperties(prop) {\n    if (!utils.isUndefined(config2[prop])) {\n      return getMergedValue(config1[prop], config2[prop]);\n    } else if (!utils.isUndefined(config1[prop])) {\n      return getMergedValue(undefined, config1[prop]);\n    }\n  }\n\n  // eslint-disable-next-line consistent-return\n  function valueFromConfig2(prop) {\n    if (!utils.isUndefined(config2[prop])) {\n      return getMergedValue(undefined, config2[prop]);\n    }\n  }\n\n  // eslint-disable-next-line consistent-return\n  function defaultToConfig2(prop) {\n    if (!utils.isUndefined(config2[prop])) {\n      return getMergedValue(undefined, config2[prop]);\n    } else if (!utils.isUndefined(config1[prop])) {\n      return getMergedValue(undefined, config1[prop]);\n    }\n  }\n\n  // eslint-disable-next-line consistent-return\n  function mergeDirectKeys(prop) {\n    if (prop in config2) {\n      return getMergedValue(config1[prop], config2[prop]);\n    } else if (prop in config1) {\n      return getMergedValue(undefined, config1[prop]);\n    }\n  }\n\n  var mergeMap = {\n    'url': valueFromConfig2,\n    'method': valueFromConfig2,\n    'data': valueFromConfig2,\n    'baseURL': defaultToConfig2,\n    'transformRequest': defaultToConfig2,\n    'transformResponse': defaultToConfig2,\n    'paramsSerializer': defaultToConfig2,\n    'timeout': defaultToConfig2,\n    'timeoutMessage': defaultToConfig2,\n    'withCredentials': defaultToConfig2,\n    'adapter': defaultToConfig2,\n    'responseType': defaultToConfig2,\n    'xsrfCookieName': defaultToConfig2,\n    'xsrfHeaderName': defaultToConfig2,\n    'onUploadProgress': defaultToConfig2,\n    'onDownloadProgress': defaultToConfig2,\n    'decompress': defaultToConfig2,\n    'maxContentLength': defaultToConfig2,\n    'maxBodyLength': defaultToConfig2,\n    'transport': defaultToConfig2,\n    'httpAgent': defaultToConfig2,\n    'httpsAgent': defaultToConfig2,\n    'cancelToken': defaultToConfig2,\n    'socketPath': defaultToConfig2,\n    'responseEncoding': defaultToConfig2,\n    'validateStatus': mergeDirectKeys\n  };\n\n  utils.forEach(Object.keys(config1).concat(Object.keys(config2)), function computeConfigValue(prop) {\n    var merge = mergeMap[prop] || mergeDeepProperties;\n    var configValue = merge(prop);\n    (utils.isUndefined(configValue) && merge !== mergeDirectKeys) || (config[prop] = configValue);\n  });\n\n  return config;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/mergeConfig.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/settle.js":
+/*!***********************************************!*\
+  !*** ./node_modules/axios/lib/core/settle.js ***!
+  \***********************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar createError = __webpack_require__(/*! ./createError */ \"./node_modules/axios/lib/core/createError.js\");\n\n/**\n * Resolve or reject a Promise based on response status.\n *\n * @param {Function} resolve A function that resolves the promise.\n * @param {Function} reject A function that rejects the promise.\n * @param {object} response The response.\n */\nmodule.exports = function settle(resolve, reject, response) {\n  var validateStatus = response.config.validateStatus;\n  if (!response.status || !validateStatus || validateStatus(response.status)) {\n    resolve(response);\n  } else {\n    reject(createError(\n      'Request failed with status code ' + response.status,\n      response.config,\n      null,\n      response.request,\n      response\n    ));\n  }\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/settle.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/core/transformData.js":
+/*!******************************************************!*\
+  !*** ./node_modules/axios/lib/core/transformData.js ***!
+  \******************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\nvar defaults = __webpack_require__(/*! ./../defaults */ \"./node_modules/axios/lib/defaults.js\");\n\n/**\n * Transform the data for a request or a response\n *\n * @param {Object|String} data The data to be transformed\n * @param {Array} headers The headers for the request or response\n * @param {Array|Function} fns A single function or Array of functions\n * @returns {*} The resulting transformed data\n */\nmodule.exports = function transformData(data, headers, fns) {\n  var context = this || defaults;\n  /*eslint no-param-reassign:0*/\n  utils.forEach(fns, function transform(fn) {\n    data = fn.call(context, data, headers);\n  });\n\n  return data;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/core/transformData.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/defaults.js":
+/*!********************************************!*\
+  !*** ./node_modules/axios/lib/defaults.js ***!
+  \********************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./utils */ \"./node_modules/axios/lib/utils.js\");\nvar normalizeHeaderName = __webpack_require__(/*! ./helpers/normalizeHeaderName */ \"./node_modules/axios/lib/helpers/normalizeHeaderName.js\");\nvar enhanceError = __webpack_require__(/*! ./core/enhanceError */ \"./node_modules/axios/lib/core/enhanceError.js\");\n\nvar DEFAULT_CONTENT_TYPE = {\n  'Content-Type': 'application/x-www-form-urlencoded'\n};\n\nfunction setContentTypeIfUnset(headers, value) {\n  if (!utils.isUndefined(headers) && utils.isUndefined(headers['Content-Type'])) {\n    headers['Content-Type'] = value;\n  }\n}\n\nfunction getDefaultAdapter() {\n  var adapter;\n  if (typeof XMLHttpRequest !== 'undefined') {\n    // For browsers use XHR adapter\n    adapter = __webpack_require__(/*! ./adapters/xhr */ \"./node_modules/axios/lib/adapters/xhr.js\");\n  } else if (typeof process !== 'undefined' && Object.prototype.toString.call(process) === '[object process]') {\n    // For node use HTTP adapter\n    adapter = __webpack_require__(/*! ./adapters/http */ \"./node_modules/axios/lib/adapters/xhr.js\");\n  }\n  return adapter;\n}\n\nfunction stringifySafely(rawValue, parser, encoder) {\n  if (utils.isString(rawValue)) {\n    try {\n      (parser || JSON.parse)(rawValue);\n      return utils.trim(rawValue);\n    } catch (e) {\n      if (e.name !== 'SyntaxError') {\n        throw e;\n      }\n    }\n  }\n\n  return (encoder || JSON.stringify)(rawValue);\n}\n\nvar defaults = {\n\n  transitional: {\n    silentJSONParsing: true,\n    forcedJSONParsing: true,\n    clarifyTimeoutError: false\n  },\n\n  adapter: getDefaultAdapter(),\n\n  transformRequest: [function transformRequest(data, headers) {\n    normalizeHeaderName(headers, 'Accept');\n    normalizeHeaderName(headers, 'Content-Type');\n\n    if (utils.isFormData(data) ||\n      utils.isArrayBuffer(data) ||\n      utils.isBuffer(data) ||\n      utils.isStream(data) ||\n      utils.isFile(data) ||\n      utils.isBlob(data)\n    ) {\n      return data;\n    }\n    if (utils.isArrayBufferView(data)) {\n      return data.buffer;\n    }\n    if (utils.isURLSearchParams(data)) {\n      setContentTypeIfUnset(headers, 'application/x-www-form-urlencoded;charset=utf-8');\n      return data.toString();\n    }\n    if (utils.isObject(data) || (headers && headers['Content-Type'] === 'application/json')) {\n      setContentTypeIfUnset(headers, 'application/json');\n      return stringifySafely(data);\n    }\n    return data;\n  }],\n\n  transformResponse: [function transformResponse(data) {\n    var transitional = this.transitional || defaults.transitional;\n    var silentJSONParsing = transitional && transitional.silentJSONParsing;\n    var forcedJSONParsing = transitional && transitional.forcedJSONParsing;\n    var strictJSONParsing = !silentJSONParsing && this.responseType === 'json';\n\n    if (strictJSONParsing || (forcedJSONParsing && utils.isString(data) && data.length)) {\n      try {\n        return JSON.parse(data);\n      } catch (e) {\n        if (strictJSONParsing) {\n          if (e.name === 'SyntaxError') {\n            throw enhanceError(e, this, 'E_JSON_PARSE');\n          }\n          throw e;\n        }\n      }\n    }\n\n    return data;\n  }],\n\n  /**\n   * A timeout in milliseconds to abort a request. If set to 0 (default) a\n   * timeout is not created.\n   */\n  timeout: 0,\n\n  xsrfCookieName: 'XSRF-TOKEN',\n  xsrfHeaderName: 'X-XSRF-TOKEN',\n\n  maxContentLength: -1,\n  maxBodyLength: -1,\n\n  validateStatus: function validateStatus(status) {\n    return status >= 200 && status < 300;\n  },\n\n  headers: {\n    common: {\n      'Accept': 'application/json, text/plain, */*'\n    }\n  }\n};\n\nutils.forEach(['delete', 'get', 'head'], function forEachMethodNoData(method) {\n  defaults.headers[method] = {};\n});\n\nutils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {\n  defaults.headers[method] = utils.merge(DEFAULT_CONTENT_TYPE);\n});\n\nmodule.exports = defaults;\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/defaults.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/env/data.js":
+/*!********************************************!*\
+  !*** ./node_modules/axios/lib/env/data.js ***!
+  \********************************************/
+/***/ ((module) => {
+
+eval("module.exports = {\n  \"version\": \"0.24.0\"\n};\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/env/data.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/bind.js":
+/*!************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/bind.js ***!
+  \************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nmodule.exports = function bind(fn, thisArg) {\n  return function wrap() {\n    var args = new Array(arguments.length);\n    for (var i = 0; i < args.length; i++) {\n      args[i] = arguments[i];\n    }\n    return fn.apply(thisArg, args);\n  };\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/bind.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/buildURL.js":
+/*!****************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/buildURL.js ***!
+  \****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\n\nfunction encode(val) {\n  return encodeURIComponent(val).\n    replace(/%3A/gi, ':').\n    replace(/%24/g, '$').\n    replace(/%2C/gi, ',').\n    replace(/%20/g, '+').\n    replace(/%5B/gi, '[').\n    replace(/%5D/gi, ']');\n}\n\n/**\n * Build a URL by appending params to the end\n *\n * @param {string} url The base of the url (e.g., http://www.google.com)\n * @param {object} [params] The params to be appended\n * @returns {string} The formatted url\n */\nmodule.exports = function buildURL(url, params, paramsSerializer) {\n  /*eslint no-param-reassign:0*/\n  if (!params) {\n    return url;\n  }\n\n  var serializedParams;\n  if (paramsSerializer) {\n    serializedParams = paramsSerializer(params);\n  } else if (utils.isURLSearchParams(params)) {\n    serializedParams = params.toString();\n  } else {\n    var parts = [];\n\n    utils.forEach(params, function serialize(val, key) {\n      if (val === null || typeof val === 'undefined') {\n        return;\n      }\n\n      if (utils.isArray(val)) {\n        key = key + '[]';\n      } else {\n        val = [val];\n      }\n\n      utils.forEach(val, function parseValue(v) {\n        if (utils.isDate(v)) {\n          v = v.toISOString();\n        } else if (utils.isObject(v)) {\n          v = JSON.stringify(v);\n        }\n        parts.push(encode(key) + '=' + encode(v));\n      });\n    });\n\n    serializedParams = parts.join('&');\n  }\n\n  if (serializedParams) {\n    var hashmarkIndex = url.indexOf('#');\n    if (hashmarkIndex !== -1) {\n      url = url.slice(0, hashmarkIndex);\n    }\n\n    url += (url.indexOf('?') === -1 ? '?' : '&') + serializedParams;\n  }\n\n  return url;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/buildURL.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/combineURLs.js":
+/*!*******************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/combineURLs.js ***!
+  \*******************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * Creates a new URL by combining the specified URLs\n *\n * @param {string} baseURL The base URL\n * @param {string} relativeURL The relative URL\n * @returns {string} The combined URL\n */\nmodule.exports = function combineURLs(baseURL, relativeURL) {\n  return relativeURL\n    ? baseURL.replace(/\\/+$/, '') + '/' + relativeURL.replace(/^\\/+/, '')\n    : baseURL;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/combineURLs.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/cookies.js":
+/*!***************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/cookies.js ***!
+  \***************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\n\nmodule.exports = (\n  utils.isStandardBrowserEnv() ?\n\n  // Standard browser envs support document.cookie\n    (function standardBrowserEnv() {\n      return {\n        write: function write(name, value, expires, path, domain, secure) {\n          var cookie = [];\n          cookie.push(name + '=' + encodeURIComponent(value));\n\n          if (utils.isNumber(expires)) {\n            cookie.push('expires=' + new Date(expires).toGMTString());\n          }\n\n          if (utils.isString(path)) {\n            cookie.push('path=' + path);\n          }\n\n          if (utils.isString(domain)) {\n            cookie.push('domain=' + domain);\n          }\n\n          if (secure === true) {\n            cookie.push('secure');\n          }\n\n          document.cookie = cookie.join('; ');\n        },\n\n        read: function read(name) {\n          var match = document.cookie.match(new RegExp('(^|;\\\\s*)(' + name + ')=([^;]*)'));\n          return (match ? decodeURIComponent(match[3]) : null);\n        },\n\n        remove: function remove(name) {\n          this.write(name, '', Date.now() - 86400000);\n        }\n      };\n    })() :\n\n  // Non standard browser env (web workers, react-native) lack needed support.\n    (function nonStandardBrowserEnv() {\n      return {\n        write: function write() {},\n        read: function read() { return null; },\n        remove: function remove() {}\n      };\n    })()\n);\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/cookies.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/isAbsoluteURL.js":
+/*!*********************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/isAbsoluteURL.js ***!
+  \*********************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * Determines whether the specified URL is absolute\n *\n * @param {string} url The URL to test\n * @returns {boolean} True if the specified URL is absolute, otherwise false\n */\nmodule.exports = function isAbsoluteURL(url) {\n  // A URL is considered absolute if it begins with \"<scheme>://\" or \"//\" (protocol-relative URL).\n  // RFC 3986 defines scheme name as a sequence of characters beginning with a letter and followed\n  // by any combination of letters, digits, plus, period, or hyphen.\n  return /^([a-z][a-z\\d\\+\\-\\.]*:)?\\/\\//i.test(url);\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/isAbsoluteURL.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/isAxiosError.js":
+/*!********************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/isAxiosError.js ***!
+  \********************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * Determines whether the payload is an error thrown by Axios\n *\n * @param {*} payload The value to test\n * @returns {boolean} True if the payload is an error thrown by Axios, otherwise false\n */\nmodule.exports = function isAxiosError(payload) {\n  return (typeof payload === 'object') && (payload.isAxiosError === true);\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/isAxiosError.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/isURLSameOrigin.js":
+/*!***********************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/isURLSameOrigin.js ***!
+  \***********************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\n\nmodule.exports = (\n  utils.isStandardBrowserEnv() ?\n\n  // Standard browser envs have full support of the APIs needed to test\n  // whether the request URL is of the same origin as current location.\n    (function standardBrowserEnv() {\n      var msie = /(msie|trident)/i.test(navigator.userAgent);\n      var urlParsingNode = document.createElement('a');\n      var originURL;\n\n      /**\n    * Parse a URL to discover it's components\n    *\n    * @param {String} url The URL to be parsed\n    * @returns {Object}\n    */\n      function resolveURL(url) {\n        var href = url;\n\n        if (msie) {\n        // IE needs attribute set twice to normalize properties\n          urlParsingNode.setAttribute('href', href);\n          href = urlParsingNode.href;\n        }\n\n        urlParsingNode.setAttribute('href', href);\n\n        // urlParsingNode provides the UrlUtils interface - http://url.spec.whatwg.org/#urlutils\n        return {\n          href: urlParsingNode.href,\n          protocol: urlParsingNode.protocol ? urlParsingNode.protocol.replace(/:$/, '') : '',\n          host: urlParsingNode.host,\n          search: urlParsingNode.search ? urlParsingNode.search.replace(/^\\?/, '') : '',\n          hash: urlParsingNode.hash ? urlParsingNode.hash.replace(/^#/, '') : '',\n          hostname: urlParsingNode.hostname,\n          port: urlParsingNode.port,\n          pathname: (urlParsingNode.pathname.charAt(0) === '/') ?\n            urlParsingNode.pathname :\n            '/' + urlParsingNode.pathname\n        };\n      }\n\n      originURL = resolveURL(window.location.href);\n\n      /**\n    * Determine if a URL shares the same origin as the current location\n    *\n    * @param {String} requestURL The URL to test\n    * @returns {boolean} True if URL shares the same origin, otherwise false\n    */\n      return function isURLSameOrigin(requestURL) {\n        var parsed = (utils.isString(requestURL)) ? resolveURL(requestURL) : requestURL;\n        return (parsed.protocol === originURL.protocol &&\n            parsed.host === originURL.host);\n      };\n    })() :\n\n  // Non standard browser envs (web workers, react-native) lack needed support.\n    (function nonStandardBrowserEnv() {\n      return function isURLSameOrigin() {\n        return true;\n      };\n    })()\n);\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/isURLSameOrigin.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/normalizeHeaderName.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/normalizeHeaderName.js ***!
+  \***************************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ../utils */ \"./node_modules/axios/lib/utils.js\");\n\nmodule.exports = function normalizeHeaderName(headers, normalizedName) {\n  utils.forEach(headers, function processHeader(value, name) {\n    if (name !== normalizedName && name.toUpperCase() === normalizedName.toUpperCase()) {\n      headers[normalizedName] = value;\n      delete headers[name];\n    }\n  });\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/normalizeHeaderName.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/parseHeaders.js":
+/*!********************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/parseHeaders.js ***!
+  \********************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar utils = __webpack_require__(/*! ./../utils */ \"./node_modules/axios/lib/utils.js\");\n\n// Headers whose duplicates are ignored by node\n// c.f. https://nodejs.org/api/http.html#http_message_headers\nvar ignoreDuplicateOf = [\n  'age', 'authorization', 'content-length', 'content-type', 'etag',\n  'expires', 'from', 'host', 'if-modified-since', 'if-unmodified-since',\n  'last-modified', 'location', 'max-forwards', 'proxy-authorization',\n  'referer', 'retry-after', 'user-agent'\n];\n\n/**\n * Parse headers into an object\n *\n * ```\n * Date: Wed, 27 Aug 2014 08:58:49 GMT\n * Content-Type: application/json\n * Connection: keep-alive\n * Transfer-Encoding: chunked\n * ```\n *\n * @param {String} headers Headers needing to be parsed\n * @returns {Object} Headers parsed into an object\n */\nmodule.exports = function parseHeaders(headers) {\n  var parsed = {};\n  var key;\n  var val;\n  var i;\n\n  if (!headers) { return parsed; }\n\n  utils.forEach(headers.split('\\n'), function parser(line) {\n    i = line.indexOf(':');\n    key = utils.trim(line.substr(0, i)).toLowerCase();\n    val = utils.trim(line.substr(i + 1));\n\n    if (key) {\n      if (parsed[key] && ignoreDuplicateOf.indexOf(key) >= 0) {\n        return;\n      }\n      if (key === 'set-cookie') {\n        parsed[key] = (parsed[key] ? parsed[key] : []).concat([val]);\n      } else {\n        parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;\n      }\n    }\n  });\n\n  return parsed;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/parseHeaders.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/spread.js":
+/*!**************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/spread.js ***!
+  \**************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/**\n * Syntactic sugar for invoking a function and expanding an array for arguments.\n *\n * Common use case would be to use `Function.prototype.apply`.\n *\n *  ```js\n *  function f(x, y, z) {}\n *  var args = [1, 2, 3];\n *  f.apply(null, args);\n *  ```\n *\n * With `spread` this example can be re-written.\n *\n *  ```js\n *  spread(function(x, y, z) {})([1, 2, 3]);\n *  ```\n *\n * @param {Function} callback\n * @returns {Function}\n */\nmodule.exports = function spread(callback) {\n  return function wrap(arr) {\n    return callback.apply(null, arr);\n  };\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/spread.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/helpers/validator.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/validator.js ***!
+  \*****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar VERSION = (__webpack_require__(/*! ../env/data */ \"./node_modules/axios/lib/env/data.js\").version);\n\nvar validators = {};\n\n// eslint-disable-next-line func-names\n['object', 'boolean', 'number', 'function', 'string', 'symbol'].forEach(function(type, i) {\n  validators[type] = function validator(thing) {\n    return typeof thing === type || 'a' + (i < 1 ? 'n ' : ' ') + type;\n  };\n});\n\nvar deprecatedWarnings = {};\n\n/**\n * Transitional option validator\n * @param {function|boolean?} validator - set to false if the transitional option has been removed\n * @param {string?} version - deprecated version / removed since version\n * @param {string?} message - some message with additional info\n * @returns {function}\n */\nvalidators.transitional = function transitional(validator, version, message) {\n  function formatMessage(opt, desc) {\n    return '[Axios v' + VERSION + '] Transitional option \\'' + opt + '\\'' + desc + (message ? '. ' + message : '');\n  }\n\n  // eslint-disable-next-line func-names\n  return function(value, opt, opts) {\n    if (validator === false) {\n      throw new Error(formatMessage(opt, ' has been removed' + (version ? ' in ' + version : '')));\n    }\n\n    if (version && !deprecatedWarnings[opt]) {\n      deprecatedWarnings[opt] = true;\n      // eslint-disable-next-line no-console\n      console.warn(\n        formatMessage(\n          opt,\n          ' has been deprecated since v' + version + ' and will be removed in the near future'\n        )\n      );\n    }\n\n    return validator ? validator(value, opt, opts) : true;\n  };\n};\n\n/**\n * Assert object's properties type\n * @param {object} options\n * @param {object} schema\n * @param {boolean?} allowUnknown\n */\n\nfunction assertOptions(options, schema, allowUnknown) {\n  if (typeof options !== 'object') {\n    throw new TypeError('options must be an object');\n  }\n  var keys = Object.keys(options);\n  var i = keys.length;\n  while (i-- > 0) {\n    var opt = keys[i];\n    var validator = schema[opt];\n    if (validator) {\n      var value = options[opt];\n      var result = value === undefined || validator(value, opt, options);\n      if (result !== true) {\n        throw new TypeError('option ' + opt + ' must be ' + result);\n      }\n      continue;\n    }\n    if (allowUnknown !== true) {\n      throw Error('Unknown option ' + opt);\n    }\n  }\n}\n\nmodule.exports = {\n  assertOptions: assertOptions,\n  validators: validators\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/helpers/validator.js?");
+
+/***/ }),
+
+/***/ "./node_modules/axios/lib/utils.js":
+/*!*****************************************!*\
+  !*** ./node_modules/axios/lib/utils.js ***!
+  \*****************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\nvar bind = __webpack_require__(/*! ./helpers/bind */ \"./node_modules/axios/lib/helpers/bind.js\");\n\n// utils is a library of generic helper functions non-specific to axios\n\nvar toString = Object.prototype.toString;\n\n/**\n * Determine if a value is an Array\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is an Array, otherwise false\n */\nfunction isArray(val) {\n  return toString.call(val) === '[object Array]';\n}\n\n/**\n * Determine if a value is undefined\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if the value is undefined, otherwise false\n */\nfunction isUndefined(val) {\n  return typeof val === 'undefined';\n}\n\n/**\n * Determine if a value is a Buffer\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Buffer, otherwise false\n */\nfunction isBuffer(val) {\n  return val !== null && !isUndefined(val) && val.constructor !== null && !isUndefined(val.constructor)\n    && typeof val.constructor.isBuffer === 'function' && val.constructor.isBuffer(val);\n}\n\n/**\n * Determine if a value is an ArrayBuffer\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is an ArrayBuffer, otherwise false\n */\nfunction isArrayBuffer(val) {\n  return toString.call(val) === '[object ArrayBuffer]';\n}\n\n/**\n * Determine if a value is a FormData\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is an FormData, otherwise false\n */\nfunction isFormData(val) {\n  return (typeof FormData !== 'undefined') && (val instanceof FormData);\n}\n\n/**\n * Determine if a value is a view on an ArrayBuffer\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a view on an ArrayBuffer, otherwise false\n */\nfunction isArrayBufferView(val) {\n  var result;\n  if ((typeof ArrayBuffer !== 'undefined') && (ArrayBuffer.isView)) {\n    result = ArrayBuffer.isView(val);\n  } else {\n    result = (val) && (val.buffer) && (val.buffer instanceof ArrayBuffer);\n  }\n  return result;\n}\n\n/**\n * Determine if a value is a String\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a String, otherwise false\n */\nfunction isString(val) {\n  return typeof val === 'string';\n}\n\n/**\n * Determine if a value is a Number\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Number, otherwise false\n */\nfunction isNumber(val) {\n  return typeof val === 'number';\n}\n\n/**\n * Determine if a value is an Object\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is an Object, otherwise false\n */\nfunction isObject(val) {\n  return val !== null && typeof val === 'object';\n}\n\n/**\n * Determine if a value is a plain Object\n *\n * @param {Object} val The value to test\n * @return {boolean} True if value is a plain Object, otherwise false\n */\nfunction isPlainObject(val) {\n  if (toString.call(val) !== '[object Object]') {\n    return false;\n  }\n\n  var prototype = Object.getPrototypeOf(val);\n  return prototype === null || prototype === Object.prototype;\n}\n\n/**\n * Determine if a value is a Date\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Date, otherwise false\n */\nfunction isDate(val) {\n  return toString.call(val) === '[object Date]';\n}\n\n/**\n * Determine if a value is a File\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a File, otherwise false\n */\nfunction isFile(val) {\n  return toString.call(val) === '[object File]';\n}\n\n/**\n * Determine if a value is a Blob\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Blob, otherwise false\n */\nfunction isBlob(val) {\n  return toString.call(val) === '[object Blob]';\n}\n\n/**\n * Determine if a value is a Function\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Function, otherwise false\n */\nfunction isFunction(val) {\n  return toString.call(val) === '[object Function]';\n}\n\n/**\n * Determine if a value is a Stream\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a Stream, otherwise false\n */\nfunction isStream(val) {\n  return isObject(val) && isFunction(val.pipe);\n}\n\n/**\n * Determine if a value is a URLSearchParams object\n *\n * @param {Object} val The value to test\n * @returns {boolean} True if value is a URLSearchParams object, otherwise false\n */\nfunction isURLSearchParams(val) {\n  return typeof URLSearchParams !== 'undefined' && val instanceof URLSearchParams;\n}\n\n/**\n * Trim excess whitespace off the beginning and end of a string\n *\n * @param {String} str The String to trim\n * @returns {String} The String freed of excess whitespace\n */\nfunction trim(str) {\n  return str.trim ? str.trim() : str.replace(/^\\s+|\\s+$/g, '');\n}\n\n/**\n * Determine if we're running in a standard browser environment\n *\n * This allows axios to run in a web worker, and react-native.\n * Both environments support XMLHttpRequest, but not fully standard globals.\n *\n * web workers:\n *  typeof window -> undefined\n *  typeof document -> undefined\n *\n * react-native:\n *  navigator.product -> 'ReactNative'\n * nativescript\n *  navigator.product -> 'NativeScript' or 'NS'\n */\nfunction isStandardBrowserEnv() {\n  if (typeof navigator !== 'undefined' && (navigator.product === 'ReactNative' ||\n                                           navigator.product === 'NativeScript' ||\n                                           navigator.product === 'NS')) {\n    return false;\n  }\n  return (\n    typeof window !== 'undefined' &&\n    typeof document !== 'undefined'\n  );\n}\n\n/**\n * Iterate over an Array or an Object invoking a function for each item.\n *\n * If `obj` is an Array callback will be called passing\n * the value, index, and complete array for each item.\n *\n * If 'obj' is an Object callback will be called passing\n * the value, key, and complete object for each property.\n *\n * @param {Object|Array} obj The object to iterate\n * @param {Function} fn The callback to invoke for each item\n */\nfunction forEach(obj, fn) {\n  // Don't bother if no value provided\n  if (obj === null || typeof obj === 'undefined') {\n    return;\n  }\n\n  // Force an array if not already something iterable\n  if (typeof obj !== 'object') {\n    /*eslint no-param-reassign:0*/\n    obj = [obj];\n  }\n\n  if (isArray(obj)) {\n    // Iterate over array values\n    for (var i = 0, l = obj.length; i < l; i++) {\n      fn.call(null, obj[i], i, obj);\n    }\n  } else {\n    // Iterate over object keys\n    for (var key in obj) {\n      if (Object.prototype.hasOwnProperty.call(obj, key)) {\n        fn.call(null, obj[key], key, obj);\n      }\n    }\n  }\n}\n\n/**\n * Accepts varargs expecting each argument to be an object, then\n * immutably merges the properties of each object and returns result.\n *\n * When multiple objects contain the same key the later object in\n * the arguments list will take precedence.\n *\n * Example:\n *\n * ```js\n * var result = merge({foo: 123}, {foo: 456});\n * console.log(result.foo); // outputs 456\n * ```\n *\n * @param {Object} obj1 Object to merge\n * @returns {Object} Result of all merge properties\n */\nfunction merge(/* obj1, obj2, obj3, ... */) {\n  var result = {};\n  function assignValue(val, key) {\n    if (isPlainObject(result[key]) && isPlainObject(val)) {\n      result[key] = merge(result[key], val);\n    } else if (isPlainObject(val)) {\n      result[key] = merge({}, val);\n    } else if (isArray(val)) {\n      result[key] = val.slice();\n    } else {\n      result[key] = val;\n    }\n  }\n\n  for (var i = 0, l = arguments.length; i < l; i++) {\n    forEach(arguments[i], assignValue);\n  }\n  return result;\n}\n\n/**\n * Extends object a by mutably adding to it the properties of object b.\n *\n * @param {Object} a The object to be extended\n * @param {Object} b The object to copy properties from\n * @param {Object} thisArg The object to bind function to\n * @return {Object} The resulting value of object a\n */\nfunction extend(a, b, thisArg) {\n  forEach(b, function assignValue(val, key) {\n    if (thisArg && typeof val === 'function') {\n      a[key] = bind(val, thisArg);\n    } else {\n      a[key] = val;\n    }\n  });\n  return a;\n}\n\n/**\n * Remove byte order marker. This catches EF BB BF (the UTF-8 BOM)\n *\n * @param {string} content with BOM\n * @return {string} content value without BOM\n */\nfunction stripBOM(content) {\n  if (content.charCodeAt(0) === 0xFEFF) {\n    content = content.slice(1);\n  }\n  return content;\n}\n\nmodule.exports = {\n  isArray: isArray,\n  isArrayBuffer: isArrayBuffer,\n  isBuffer: isBuffer,\n  isFormData: isFormData,\n  isArrayBufferView: isArrayBufferView,\n  isString: isString,\n  isNumber: isNumber,\n  isObject: isObject,\n  isPlainObject: isPlainObject,\n  isUndefined: isUndefined,\n  isDate: isDate,\n  isFile: isFile,\n  isBlob: isBlob,\n  isFunction: isFunction,\n  isStream: isStream,\n  isURLSearchParams: isURLSearchParams,\n  isStandardBrowserEnv: isStandardBrowserEnv,\n  forEach: forEach,\n  merge: merge,\n  extend: extend,\n  trim: trim,\n  stripBOM: stripBOM\n};\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/axios/lib/utils.js?");
+
+/***/ }),
+
+/***/ "./node_modules/css-loader/dist/cjs.js!./node_modules/sass-loader/dist/cjs.js!./src/scss/index.scss":
+/*!**********************************************************************************************************!*\
+  !*** ./node_modules/css-loader/dist/cjs.js!./node_modules/sass-loader/dist/cjs.js!./src/scss/index.scss ***!
+  \**********************************************************************************************************/
+/***/ ((module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _node_modules_css_loader_dist_runtime_noSourceMaps_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../../node_modules/css-loader/dist/runtime/noSourceMaps.js */ \"./node_modules/css-loader/dist/runtime/noSourceMaps.js\");\n/* harmony import */ var _node_modules_css_loader_dist_runtime_noSourceMaps_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_node_modules_css_loader_dist_runtime_noSourceMaps_js__WEBPACK_IMPORTED_MODULE_0__);\n/* harmony import */ var _node_modules_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../../node_modules/css-loader/dist/runtime/api.js */ \"./node_modules/css-loader/dist/runtime/api.js\");\n/* harmony import */ var _node_modules_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_node_modules_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_1__);\n// Imports\n\n\nvar ___CSS_LOADER_EXPORT___ = _node_modules_css_loader_dist_runtime_api_js__WEBPACK_IMPORTED_MODULE_1___default()((_node_modules_css_loader_dist_runtime_noSourceMaps_js__WEBPACK_IMPORTED_MODULE_0___default()));\n// Module\n___CSS_LOADER_EXPORT___.push([module.id, \"body {\\n  margin: 0;\\n  font-family: -apple-system, BlinkMacSystemFont, \\\"Segoe UI\\\", \\\"Roboto\\\", \\\"Oxygen\\\", \\\"Ubuntu\\\", \\\"Cantarell\\\", \\\"Fira Sans\\\", \\\"Droid Sans\\\", \\\"Helvetica Neue\\\", sans-serif;\\n  -webkit-font-smoothing: antialiased;\\n  -moz-osx-font-smoothing: grayscale;\\n}\\n\\ncode {\\n  font-family: source-code-pro, Menlo, Monaco, Consolas, \\\"Courier New\\\", monospace;\\n}\\n\\n.gms-button {\\n  padding: 15px 25px;\\n  border-radius: 10px;\\n  border: none;\\n  font-weight: bold;\\n  font-size: 18px;\\n  transition: background-color 0.3s ease, scale 1.5s ease;\\n  box-shadow: 0px 8px 15px rgba(0, 0, 0, 0.2);\\n  cursor: pointer;\\n  display: flex;\\n  justify-content: center;\\n}\\n.gms-button:hover {\\n  transform: scale(1.01);\\n}\\n.gms-button:disabled, .gms-button:disabled:hover {\\n  cursor: not-allowed;\\n  transform: none;\\n}\\n.gms-button__small {\\n  padding: 9px 12px;\\n  border-radius: 14px;\\n}\\n\\n.gms-button--bolt svg {\\n  margin-left: 15px;\\n}\\n.gms-button--bolt.gms-button--no-text svg {\\n  margin-left: -4px;\\n  margin-right: -4px;\\n}\\n\\n/* Dark Blue Theme */\\n.gms-button--dark-blue,\\n.gms-theme--dark-blue .gms-button {\\n  background-color: #050c3e;\\n  color: white;\\n}\\n.gms-button--dark-blue:hover,\\n.gms-theme--dark-blue .gms-button:hover {\\n  background-color: #09156d;\\n}\\n.gms-button--dark-blue:disabled, .gms-button--dark-blue:disabled:hover,\\n.gms-theme--dark-blue .gms-button:disabled,\\n.gms-theme--dark-blue .gms-button:disabled:hover {\\n  background-color: #505159;\\n}\\n.gms-button--dark-blue--dark,\\n.gms-theme--dark-blue .gms-button--dark {\\n  background-color: #050c3e;\\n  color: white;\\n}\\n.gms-button--dark-blue--dark:hover,\\n.gms-theme--dark-blue .gms-button--dark:hover {\\n  background-color: #09156d;\\n}\\n.gms-button--dark-blue--dark:disabled, .gms-button--dark-blue--dark:disabled:hover,\\n.gms-theme--dark-blue .gms-button--dark:disabled,\\n.gms-theme--dark-blue .gms-button--dark:disabled:hover {\\n  background-color: #505159;\\n}\\n.gms-button--dark-blue--med,\\n.gms-theme--dark-blue .gms-button--med {\\n  background-color: #021281;\\n  color: white;\\n}\\n.gms-button--dark-blue--med:hover,\\n.gms-theme--dark-blue .gms-button--med:hover {\\n  background-color: #0319b3;\\n}\\n.gms-button--dark-blue--med:disabled, .gms-button--dark-blue--med:disabled:hover,\\n.gms-theme--dark-blue .gms-button--med:disabled,\\n.gms-theme--dark-blue .gms-button--med:disabled:hover {\\n  background-color: #616688;\\n}\\n.gms-button--dark-blue--light,\\n.gms-theme--dark-blue .gms-button--light {\\n  background-color: #5ca0f5;\\n  color: black;\\n}\\n.gms-button--dark-blue--light:hover,\\n.gms-theme--dark-blue .gms-button--light:hover {\\n  background-color: #8cbcf8;\\n}\\n.gms-button--dark-blue--light:disabled, .gms-button--dark-blue--light:disabled:hover,\\n.gms-theme--dark-blue .gms-button--light:disabled,\\n.gms-theme--dark-blue .gms-button--light:disabled:hover {\\n  background-color: #d9dbde;\\n}\\n\\n/* White Theme */\\n.gms-button--white,\\n.gms-theme--white .gms-button {\\n  background-color: #181818;\\n  color: white;\\n}\\n.gms-button--white:hover,\\n.gms-theme--white .gms-button:hover {\\n  background-color: #323232;\\n}\\n.gms-button--white:disabled, .gms-button--white:disabled:hover,\\n.gms-theme--white .gms-button:disabled,\\n.gms-theme--white .gms-button:disabled:hover {\\n  background-color: #4b4b4b;\\n}\\n.gms-button--white--dark,\\n.gms-theme--white .gms-button--dark {\\n  background-color: #181818;\\n  color: white;\\n}\\n.gms-button--white--dark:hover,\\n.gms-theme--white .gms-button--dark:hover {\\n  background-color: #323232;\\n}\\n.gms-button--white--dark:disabled, .gms-button--white--dark:disabled:hover,\\n.gms-theme--white .gms-button--dark:disabled,\\n.gms-theme--white .gms-button--dark:disabled:hover {\\n  background-color: #4b4b4b;\\n}\\n.gms-button--white--med,\\n.gms-theme--white .gms-button--med {\\n  background-color: #5e5e74;\\n  color: white;\\n}\\n.gms-button--white--med:hover,\\n.gms-theme--white .gms-button--med:hover {\\n  background-color: #757590;\\n}\\n.gms-button--white--med:disabled, .gms-button--white--med:disabled:hover,\\n.gms-theme--white .gms-button--med:disabled,\\n.gms-theme--white .gms-button--med:disabled:hover {\\n  background-color: #9c9c9c;\\n}\\n.gms-button--white--light,\\n.gms-theme--white .gms-button--light {\\n  background-color: white;\\n  color: black;\\n}\\n.gms-button--white--light:hover,\\n.gms-theme--white .gms-button--light:hover {\\n  background-color: white;\\n}\\n.gms-button--white--light:disabled, .gms-button--white--light:disabled:hover,\\n.gms-theme--white .gms-button--light:disabled,\\n.gms-theme--white .gms-button--light:disabled:hover {\\n  background-color: white;\\n}\\n\\n.gms-button__svg-container {\\n  display: flex;\\n  align-items: center;\\n  justify-content: center;\\n}\\n\\n#gms-root .gms-modal-card h1 {\\n  font-size: 38px;\\n  font-weight: bold;\\n}\\n#gms-root .gms-modal-card h3 {\\n  font-size: 24px;\\n  font-weight: bold;\\n}\\n#gms-root .gms-modal-card p {\\n  font-size: 18px;\\n}\\n#gms-root .gms-modal-card h1,\\n#gms-root .gms-modal-card h2,\\n#gms-root .gms-modal-card h3,\\n#gms-root .gms-modal-card p {\\n  color: black;\\n}\\n#gms-root .gms-modal-card .gms-amount-input,\\n#gms-root .gms-modal-card .gms-note-input {\\n  border-color: black;\\n}\\n#gms-root.gms-theme--is-dark .gms-modal-card h1,\\n#gms-root.gms-theme--is-dark .gms-modal-card h2,\\n#gms-root.gms-theme--is-dark .gms-modal-card h3,\\n#gms-root.gms-theme--is-dark .gms-modal-card p {\\n  color: white;\\n}\\n#gms-root.gms-theme--is-dark .gms-modal-card .gms-amount-input,\\n#gms-root.gms-theme--is-dark .gms-modal-card .gms-note-input {\\n  border-color: transparent;\\n}\\n#gms-root.gms-theme--dark-blue .gms-modal-card {\\n  background-color: #050c3e;\\n}\\n#gms-root.gms-theme--white .gms-modal-card {\\n  background-color: white;\\n}\\n\\n.gms-modal-window {\\n  position: fixed;\\n  height: 100vh;\\n  width: 100vw;\\n  height: 100%;\\n  z-index: 1;\\n  cursor: pointer;\\n  top: 0;\\n  left: 0;\\n  pointer-events: none;\\n}\\n.gms-modal-window .gms-button {\\n  margin: 10px 0;\\n  min-width: 200px;\\n  max-width: 100%;\\n}\\n.gms-modal-window .gms-modal-screen {\\n  display: flex;\\n  flex-direction: column;\\n  align-items: center;\\n  justify-content: center;\\n  width: 100%;\\n  height: 100%;\\n  transition: background-color 0.4s ease;\\n  position: absolute;\\n  background-color: rgba(0, 0, 0, 0);\\n}\\n.gms-modal-window .gms-modal-card {\\n  width: 90%;\\n  height: 80%;\\n  max-width: 400px;\\n  min-height: 500px;\\n  border-radius: 20px;\\n  padding: 20px;\\n  cursor: auto;\\n  transition: opacity 0.3s ease;\\n  box-shadow: 0px 8px 15px rgba(0, 0, 0, 0.4);\\n  opacity: 0;\\n}\\n.gms-modal-window .gms-modal-content {\\n  display: flex;\\n  flex-direction: column;\\n  align-items: center;\\n  justify-content: space-between;\\n  height: 100%;\\n}\\n.gms-modal-window .gms-modal-body {\\n  display: flex;\\n  flex-direction: column;\\n  align-items: center;\\n  justify-content: center;\\n  height: 100%;\\n  width: 100%;\\n}\\n.gms-modal-window .gms-modal-actions {\\n  display: flex;\\n  flex-direction: column;\\n  align-items: center;\\n  justify-content: flex-end;\\n}\\n.gms-modal-window .gms-modal-header {\\n  max-height: 150px;\\n  text-align: center;\\n}\\n.gms-modal-window .gms-amount-input {\\n  font-size: 50px;\\n  font-weight: bold;\\n  padding: 20px;\\n  border-radius: 10px;\\n  width: 150px;\\n  max-width: 100%;\\n  border: none;\\n  text-align: center;\\n  border: 6px solid transparent;\\n}\\n.gms-modal-window input[type=number]::-webkit-inner-spin-button,\\n.gms-modal-window input[type=number]::-webkit-outer-spin-button {\\n  -webkit-appearance: none;\\n}\\n.gms-modal-window .gms-note-input {\\n  padding: 10px;\\n  border-radius: 10px;\\n  font-size: 18px;\\n  max-width: 100%;\\n  border: none;\\n  margin-top: 10px;\\n  border: 6px solid transparent;\\n}\\n.gms-modal-window .gms-modal-button {\\n  margin: 10px 0;\\n  min-width: 200px;\\n  max-width: 100%;\\n}\\n.gms-modal-window .gms-modal-row {\\n  display: flex;\\n  flex-direction: row;\\n  justify-content: flex-start;\\n  align-items: center;\\n}\\n.gms-modal-window h1.gms-large-text {\\n  font-size: 50px;\\n  font-weight: bold;\\n}\\n.gms-modal-window .gms-qr__expired {\\n  width: 180px;\\n  height: 180px;\\n  background-color: black;\\n  border-radius: 5px;\\n  display: flex;\\n  flex-direction: column;\\n  align-items: center;\\n  justify-content: center;\\n}\\n.gms-modal-window .gms-qr {\\n  padding: 10px;\\n  border-radius: 10px;\\n  background-color: white;\\n}\\n\\n.gms--show .gms-modal-screen {\\n  background-color: rgba(0, 0, 0, 0.8);\\n}\\n.gms--show .gms-modal-card {\\n  opacity: 1;\\n}\\n.gms--show .gms-modal-window {\\n  pointer-events: all;\\n}\\n\\n@keyframes stroke {\\n  100% {\\n    stroke-dashoffset: 0;\\n  }\\n}\\n@keyframes scale {\\n  0%, 100% {\\n    transform: none;\\n  }\\n  50% {\\n    transform: scale3d(1.1, 1.1, 1) translate(-2%, -2%);\\n  }\\n}\\n@keyframes fill {\\n  100% {\\n    box-shadow: inset 0px 0px 0px 80px #fed954;\\n  }\\n}\\nsvg.gms-success {\\n  margin-top: -50px;\\n  width: 250px;\\n  stroke-dasharray: 216;\\n  stroke-dashoffset: 216;\\n  stroke-width: 3;\\n  stroke-miterlimit: 10;\\n  stroke: #fed954;\\n  fill: none;\\n  animation: stroke 0.6s cubic-bezier(0.65, 0, 0.45, 1) forwards;\\n}\\nsvg.gms-success circle {\\n  width: 106px;\\n  height: 106px;\\n  border-radius: 50%;\\n  display: block;\\n  stroke-width: 3;\\n  stroke: #fed954;\\n  stroke-miterlimit: 10;\\n  margin: 10% auto;\\n  box-shadow: inset 0px 0px 0px #fed954;\\n  animation: fill 0.4s ease-in-out 0.4s forwards, scale 0.3s ease-in-out 0.9s both;\\n}\\nsvg.gms-success path {\\n  transform-origin: 50% 50%;\\n  stroke-dasharray: 98;\\n  stroke-dashoffset: 98;\\n  animation: stroke 0.3s cubic-bezier(0.65, 0, 0.45, 1) 0.8s forwards;\\n}\\n\\n@keyframes spinner {\\n  0% {\\n    transform: rotate(0deg);\\n  }\\n  100% {\\n    transform: rotate(360deg);\\n  }\\n}\\n.gms-modal__spinner {\\n  width: 60px;\\n  height: 60px;\\n  border: 5px solid;\\n  border-radius: 50%;\\n  display: inline-block;\\n  box-sizing: border-box;\\n  border: 5px solid #fed954;\\n  border-bottom-color: transparent;\\n  animation: spinner 1s linear infinite;\\n}\\n\\n.gms-modal__spinner-container {\\n  display: flex;\\n  align-items: center;\\n  justify-content: center;\\n  height: 100%;\\n}\", \"\"]);\n// Exports\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (___CSS_LOADER_EXPORT___);\n\n\n//# sourceURL=webpack://gimme-sats/./src/scss/index.scss?./node_modules/css-loader/dist/cjs.js!./node_modules/sass-loader/dist/cjs.js");
+
+/***/ }),
+
+/***/ "./node_modules/css-loader/dist/runtime/api.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/css-loader/dist/runtime/api.js ***!
+  \*****************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/*\n  MIT License http://www.opensource.org/licenses/mit-license.php\n  Author Tobias Koppers @sokra\n*/\nmodule.exports = function (cssWithMappingToString) {\n  var list = []; // return the list of modules as css string\n\n  list.toString = function toString() {\n    return this.map(function (item) {\n      var content = \"\";\n      var needLayer = typeof item[5] !== \"undefined\";\n\n      if (item[4]) {\n        content += \"@supports (\".concat(item[4], \") {\");\n      }\n\n      if (item[2]) {\n        content += \"@media \".concat(item[2], \" {\");\n      }\n\n      if (needLayer) {\n        content += \"@layer\".concat(item[5].length > 0 ? \" \".concat(item[5]) : \"\", \" {\");\n      }\n\n      content += cssWithMappingToString(item);\n\n      if (needLayer) {\n        content += \"}\";\n      }\n\n      if (item[2]) {\n        content += \"}\";\n      }\n\n      if (item[4]) {\n        content += \"}\";\n      }\n\n      return content;\n    }).join(\"\");\n  }; // import a list of modules into the list\n\n\n  list.i = function i(modules, media, dedupe, supports, layer) {\n    if (typeof modules === \"string\") {\n      modules = [[null, modules, undefined]];\n    }\n\n    var alreadyImportedModules = {};\n\n    if (dedupe) {\n      for (var k = 0; k < this.length; k++) {\n        var id = this[k][0];\n\n        if (id != null) {\n          alreadyImportedModules[id] = true;\n        }\n      }\n    }\n\n    for (var _k = 0; _k < modules.length; _k++) {\n      var item = [].concat(modules[_k]);\n\n      if (dedupe && alreadyImportedModules[item[0]]) {\n        continue;\n      }\n\n      if (typeof layer !== \"undefined\") {\n        if (typeof item[5] === \"undefined\") {\n          item[5] = layer;\n        } else {\n          item[1] = \"@layer\".concat(item[5].length > 0 ? \" \".concat(item[5]) : \"\", \" {\").concat(item[1], \"}\");\n          item[5] = layer;\n        }\n      }\n\n      if (media) {\n        if (!item[2]) {\n          item[2] = media;\n        } else {\n          item[1] = \"@media \".concat(item[2], \" {\").concat(item[1], \"}\");\n          item[2] = media;\n        }\n      }\n\n      if (supports) {\n        if (!item[4]) {\n          item[4] = \"\".concat(supports);\n        } else {\n          item[1] = \"@supports (\".concat(item[4], \") {\").concat(item[1], \"}\");\n          item[4] = supports;\n        }\n      }\n\n      list.push(item);\n    }\n  };\n\n  return list;\n};\n\n//# sourceURL=webpack://gimme-sats/./node_modules/css-loader/dist/runtime/api.js?");
+
+/***/ }),
+
+/***/ "./node_modules/css-loader/dist/runtime/noSourceMaps.js":
+/*!**************************************************************!*\
+  !*** ./node_modules/css-loader/dist/runtime/noSourceMaps.js ***!
+  \**************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nmodule.exports = function (i) {\n  return i[1];\n};\n\n//# sourceURL=webpack://gimme-sats/./node_modules/css-loader/dist/runtime/noSourceMaps.js?");
+
+/***/ }),
+
+/***/ "./node_modules/dijkstrajs/dijkstra.js":
+/*!*********************************************!*\
+  !*** ./node_modules/dijkstrajs/dijkstra.js ***!
+  \*********************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/******************************************************************************\n * Created 2008-08-19.\n *\n * Dijkstra path-finding functions. Adapted from the Dijkstar Python project.\n *\n * Copyright (C) 2008\n *   Wyatt Baldwin <self@wyattbaldwin.com>\n *   All rights reserved\n *\n * Licensed under the MIT license.\n *\n *   http://www.opensource.org/licenses/mit-license.php\n *\n * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n * THE SOFTWARE.\n *****************************************************************************/\nvar dijkstra = {\n  single_source_shortest_paths: function(graph, s, d) {\n    // Predecessor map for each node that has been encountered.\n    // node ID => predecessor node ID\n    var predecessors = {};\n\n    // Costs of shortest paths from s to all nodes encountered.\n    // node ID => cost\n    var costs = {};\n    costs[s] = 0;\n\n    // Costs of shortest paths from s to all nodes encountered; differs from\n    // `costs` in that it provides easy access to the node that currently has\n    // the known shortest path from s.\n    // XXX: Do we actually need both `costs` and `open`?\n    var open = dijkstra.PriorityQueue.make();\n    open.push(s, 0);\n\n    var closest,\n        u, v,\n        cost_of_s_to_u,\n        adjacent_nodes,\n        cost_of_e,\n        cost_of_s_to_u_plus_cost_of_e,\n        cost_of_s_to_v,\n        first_visit;\n    while (!open.empty()) {\n      // In the nodes remaining in graph that have a known cost from s,\n      // find the node, u, that currently has the shortest path from s.\n      closest = open.pop();\n      u = closest.value;\n      cost_of_s_to_u = closest.cost;\n\n      // Get nodes adjacent to u...\n      adjacent_nodes = graph[u] || {};\n\n      // ...and explore the edges that connect u to those nodes, updating\n      // the cost of the shortest paths to any or all of those nodes as\n      // necessary. v is the node across the current edge from u.\n      for (v in adjacent_nodes) {\n        if (adjacent_nodes.hasOwnProperty(v)) {\n          // Get the cost of the edge running from u to v.\n          cost_of_e = adjacent_nodes[v];\n\n          // Cost of s to u plus the cost of u to v across e--this is *a*\n          // cost from s to v that may or may not be less than the current\n          // known cost to v.\n          cost_of_s_to_u_plus_cost_of_e = cost_of_s_to_u + cost_of_e;\n\n          // If we haven't visited v yet OR if the current known cost from s to\n          // v is greater than the new cost we just found (cost of s to u plus\n          // cost of u to v across e), update v's cost in the cost list and\n          // update v's predecessor in the predecessor list (it's now u).\n          cost_of_s_to_v = costs[v];\n          first_visit = (typeof costs[v] === 'undefined');\n          if (first_visit || cost_of_s_to_v > cost_of_s_to_u_plus_cost_of_e) {\n            costs[v] = cost_of_s_to_u_plus_cost_of_e;\n            open.push(v, cost_of_s_to_u_plus_cost_of_e);\n            predecessors[v] = u;\n          }\n        }\n      }\n    }\n\n    if (typeof d !== 'undefined' && typeof costs[d] === 'undefined') {\n      var msg = ['Could not find a path from ', s, ' to ', d, '.'].join('');\n      throw new Error(msg);\n    }\n\n    return predecessors;\n  },\n\n  extract_shortest_path_from_predecessor_list: function(predecessors, d) {\n    var nodes = [];\n    var u = d;\n    var predecessor;\n    while (u) {\n      nodes.push(u);\n      predecessor = predecessors[u];\n      u = predecessors[u];\n    }\n    nodes.reverse();\n    return nodes;\n  },\n\n  find_path: function(graph, s, d) {\n    var predecessors = dijkstra.single_source_shortest_paths(graph, s, d);\n    return dijkstra.extract_shortest_path_from_predecessor_list(\n      predecessors, d);\n  },\n\n  /**\n   * A very naive priority queue implementation.\n   */\n  PriorityQueue: {\n    make: function (opts) {\n      var T = dijkstra.PriorityQueue,\n          t = {},\n          key;\n      opts = opts || {};\n      for (key in T) {\n        if (T.hasOwnProperty(key)) {\n          t[key] = T[key];\n        }\n      }\n      t.queue = [];\n      t.sorter = opts.sorter || T.default_sorter;\n      return t;\n    },\n\n    default_sorter: function (a, b) {\n      return a.cost - b.cost;\n    },\n\n    /**\n     * Add a new item to the queue and ensure the highest priority element\n     * is at the front of the queue.\n     */\n    push: function (value, cost) {\n      var item = {value: value, cost: cost};\n      this.queue.push(item);\n      this.queue.sort(this.sorter);\n    },\n\n    /**\n     * Return the highest priority element in the queue.\n     */\n    pop: function () {\n      return this.queue.shift();\n    },\n\n    empty: function () {\n      return this.queue.length === 0;\n    }\n  }\n};\n\n\n// node.js module exports\nif (true) {\n  module.exports = dijkstra;\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/dijkstrajs/dijkstra.js?");
+
+/***/ }),
+
+/***/ "./node_modules/encode-utf8/index.js":
+/*!*******************************************!*\
+  !*** ./node_modules/encode-utf8/index.js ***!
+  \*******************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nmodule.exports = function encodeUtf8 (input) {\n  var result = []\n  var size = input.length\n\n  for (var index = 0; index < size; index++) {\n    var point = input.charCodeAt(index)\n\n    if (point >= 0xD800 && point <= 0xDBFF && size > index + 1) {\n      var second = input.charCodeAt(index + 1)\n\n      if (second >= 0xDC00 && second <= 0xDFFF) {\n        // https://mathiasbynens.be/notes/javascript-encoding#surrogate-formulae\n        point = (point - 0xD800) * 0x400 + second - 0xDC00 + 0x10000\n        index += 1\n      }\n    }\n\n    // US-ASCII\n    if (point < 0x80) {\n      result.push(point)\n      continue\n    }\n\n    // 2-byte UTF-8\n    if (point < 0x800) {\n      result.push((point >> 6) | 192)\n      result.push((point & 63) | 128)\n      continue\n    }\n\n    // 3-byte UTF-8\n    if (point < 0xD800 || (point >= 0xE000 && point < 0x10000)) {\n      result.push((point >> 12) | 224)\n      result.push(((point >> 6) & 63) | 128)\n      result.push((point & 63) | 128)\n      continue\n    }\n\n    // 4-byte UTF-8\n    if (point >= 0x10000 && point <= 0x10FFFF) {\n      result.push((point >> 18) | 240)\n      result.push(((point >> 12) & 63) | 128)\n      result.push(((point >> 6) & 63) | 128)\n      result.push((point & 63) | 128)\n      continue\n    }\n\n    // Invalid character\n    result.push(0xEF, 0xBF, 0xBD)\n  }\n\n  return new Uint8Array(result).buffer\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/encode-utf8/index.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/browser.js":
+/*!********************************************!*\
+  !*** ./node_modules/qrcode/lib/browser.js ***!
+  \********************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("\nconst canPromise = __webpack_require__(/*! ./can-promise */ \"./node_modules/qrcode/lib/can-promise.js\")\n\nconst QRCode = __webpack_require__(/*! ./core/qrcode */ \"./node_modules/qrcode/lib/core/qrcode.js\")\nconst CanvasRenderer = __webpack_require__(/*! ./renderer/canvas */ \"./node_modules/qrcode/lib/renderer/canvas.js\")\nconst SvgRenderer = __webpack_require__(/*! ./renderer/svg-tag.js */ \"./node_modules/qrcode/lib/renderer/svg-tag.js\")\n\nfunction renderCanvas (renderFunc, canvas, text, opts, cb) {\n  const args = [].slice.call(arguments, 1)\n  const argsNum = args.length\n  const isLastArgCb = typeof args[argsNum - 1] === 'function'\n\n  if (!isLastArgCb && !canPromise()) {\n    throw new Error('Callback required as last argument')\n  }\n\n  if (isLastArgCb) {\n    if (argsNum < 2) {\n      throw new Error('Too few arguments provided')\n    }\n\n    if (argsNum === 2) {\n      cb = text\n      text = canvas\n      canvas = opts = undefined\n    } else if (argsNum === 3) {\n      if (canvas.getContext && typeof cb === 'undefined') {\n        cb = opts\n        opts = undefined\n      } else {\n        cb = opts\n        opts = text\n        text = canvas\n        canvas = undefined\n      }\n    }\n  } else {\n    if (argsNum < 1) {\n      throw new Error('Too few arguments provided')\n    }\n\n    if (argsNum === 1) {\n      text = canvas\n      canvas = opts = undefined\n    } else if (argsNum === 2 && !canvas.getContext) {\n      opts = text\n      text = canvas\n      canvas = undefined\n    }\n\n    return new Promise(function (resolve, reject) {\n      try {\n        const data = QRCode.create(text, opts)\n        resolve(renderFunc(data, canvas, opts))\n      } catch (e) {\n        reject(e)\n      }\n    })\n  }\n\n  try {\n    const data = QRCode.create(text, opts)\n    cb(null, renderFunc(data, canvas, opts))\n  } catch (e) {\n    cb(e)\n  }\n}\n\nexports.create = QRCode.create\nexports.toCanvas = renderCanvas.bind(null, CanvasRenderer.render)\nexports.toDataURL = renderCanvas.bind(null, CanvasRenderer.renderToDataURL)\n\n// only svg for now.\nexports.toString = renderCanvas.bind(null, function (data, _, opts) {\n  return SvgRenderer.render(data, opts)\n})\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/browser.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/can-promise.js":
+/*!************************************************!*\
+  !*** ./node_modules/qrcode/lib/can-promise.js ***!
+  \************************************************/
+/***/ ((module) => {
+
+eval("// can-promise has a crash in some versions of react native that dont have\n// standard global objects\n// https://github.com/soldair/node-qrcode/issues/157\n\nmodule.exports = function () {\n  return typeof Promise === 'function' && Promise.prototype && Promise.prototype.then\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/can-promise.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/alignment-pattern.js":
+/*!***********************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/alignment-pattern.js ***!
+  \***********************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("/**\n * Alignment pattern are fixed reference pattern in defined positions\n * in a matrix symbology, which enables the decode software to re-synchronise\n * the coordinate mapping of the image modules in the event of moderate amounts\n * of distortion of the image.\n *\n * Alignment patterns are present only in QR Code symbols of version 2 or larger\n * and their number depends on the symbol version.\n */\n\nconst getSymbolSize = (__webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\").getSymbolSize)\n\n/**\n * Calculate the row/column coordinates of the center module of each alignment pattern\n * for the specified QR Code version.\n *\n * The alignment patterns are positioned symmetrically on either side of the diagonal\n * running from the top left corner of the symbol to the bottom right corner.\n *\n * Since positions are simmetrical only half of the coordinates are returned.\n * Each item of the array will represent in turn the x and y coordinate.\n * @see {@link getPositions}\n *\n * @param  {Number} version QR Code version\n * @return {Array}          Array of coordinate\n */\nexports.getRowColCoords = function getRowColCoords (version) {\n  if (version === 1) return []\n\n  const posCount = Math.floor(version / 7) + 2\n  const size = getSymbolSize(version)\n  const intervals = size === 145 ? 26 : Math.ceil((size - 13) / (2 * posCount - 2)) * 2\n  const positions = [size - 7] // Last coord is always (size - 7)\n\n  for (let i = 1; i < posCount - 1; i++) {\n    positions[i] = positions[i - 1] - intervals\n  }\n\n  positions.push(6) // First coord is always 6\n\n  return positions.reverse()\n}\n\n/**\n * Returns an array containing the positions of each alignment pattern.\n * Each array's element represent the center point of the pattern as (x, y) coordinates\n *\n * Coordinates are calculated expanding the row/column coordinates returned by {@link getRowColCoords}\n * and filtering out the items that overlaps with finder pattern\n *\n * @example\n * For a Version 7 symbol {@link getRowColCoords} returns values 6, 22 and 38.\n * The alignment patterns, therefore, are to be centered on (row, column)\n * positions (6,22), (22,6), (22,22), (22,38), (38,22), (38,38).\n * Note that the coordinates (6,6), (6,38), (38,6) are occupied by finder patterns\n * and are not therefore used for alignment patterns.\n *\n * let pos = getPositions(7)\n * // [[6,22], [22,6], [22,22], [22,38], [38,22], [38,38]]\n *\n * @param  {Number} version QR Code version\n * @return {Array}          Array of coordinates\n */\nexports.getPositions = function getPositions (version) {\n  const coords = []\n  const pos = exports.getRowColCoords(version)\n  const posLength = pos.length\n\n  for (let i = 0; i < posLength; i++) {\n    for (let j = 0; j < posLength; j++) {\n      // Skip if position is occupied by finder patterns\n      if ((i === 0 && j === 0) || // top-left\n          (i === 0 && j === posLength - 1) || // bottom-left\n          (i === posLength - 1 && j === 0)) { // top-right\n        continue\n      }\n\n      coords.push([pos[i], pos[j]])\n    }\n  }\n\n  return coords\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/alignment-pattern.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/alphanumeric-data.js":
+/*!***********************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/alphanumeric-data.js ***!
+  \***********************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("const Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\n\n/**\n * Array of characters available in alphanumeric mode\n *\n * As per QR Code specification, to each character\n * is assigned a value from 0 to 44 which in this case coincides\n * with the array index\n *\n * @type {Array}\n */\nconst ALPHA_NUM_CHARS = [\n  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',\n  'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',\n  'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',\n  ' ', '$', '%', '*', '+', '-', '.', '/', ':'\n]\n\nfunction AlphanumericData (data) {\n  this.mode = Mode.ALPHANUMERIC\n  this.data = data\n}\n\nAlphanumericData.getBitsLength = function getBitsLength (length) {\n  return 11 * Math.floor(length / 2) + 6 * (length % 2)\n}\n\nAlphanumericData.prototype.getLength = function getLength () {\n  return this.data.length\n}\n\nAlphanumericData.prototype.getBitsLength = function getBitsLength () {\n  return AlphanumericData.getBitsLength(this.data.length)\n}\n\nAlphanumericData.prototype.write = function write (bitBuffer) {\n  let i\n\n  // Input data characters are divided into groups of two characters\n  // and encoded as 11-bit binary codes.\n  for (i = 0; i + 2 <= this.data.length; i += 2) {\n    // The character value of the first character is multiplied by 45\n    let value = ALPHA_NUM_CHARS.indexOf(this.data[i]) * 45\n\n    // The character value of the second digit is added to the product\n    value += ALPHA_NUM_CHARS.indexOf(this.data[i + 1])\n\n    // The sum is then stored as 11-bit binary number\n    bitBuffer.put(value, 11)\n  }\n\n  // If the number of input data characters is not a multiple of two,\n  // the character value of the final character is encoded as a 6-bit binary number.\n  if (this.data.length % 2) {\n    bitBuffer.put(ALPHA_NUM_CHARS.indexOf(this.data[i]), 6)\n  }\n}\n\nmodule.exports = AlphanumericData\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/alphanumeric-data.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/bit-buffer.js":
+/*!****************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/bit-buffer.js ***!
+  \****************************************************/
+/***/ ((module) => {
+
+eval("function BitBuffer () {\n  this.buffer = []\n  this.length = 0\n}\n\nBitBuffer.prototype = {\n\n  get: function (index) {\n    const bufIndex = Math.floor(index / 8)\n    return ((this.buffer[bufIndex] >>> (7 - index % 8)) & 1) === 1\n  },\n\n  put: function (num, length) {\n    for (let i = 0; i < length; i++) {\n      this.putBit(((num >>> (length - i - 1)) & 1) === 1)\n    }\n  },\n\n  getLengthInBits: function () {\n    return this.length\n  },\n\n  putBit: function (bit) {\n    const bufIndex = Math.floor(this.length / 8)\n    if (this.buffer.length <= bufIndex) {\n      this.buffer.push(0)\n    }\n\n    if (bit) {\n      this.buffer[bufIndex] |= (0x80 >>> (this.length % 8))\n    }\n\n    this.length++\n  }\n}\n\nmodule.exports = BitBuffer\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/bit-buffer.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/bit-matrix.js":
+/*!****************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/bit-matrix.js ***!
+  \****************************************************/
+/***/ ((module) => {
+
+eval("/**\n * Helper class to handle QR Code symbol modules\n *\n * @param {Number} size Symbol size\n */\nfunction BitMatrix (size) {\n  if (!size || size < 1) {\n    throw new Error('BitMatrix size must be defined and greater than 0')\n  }\n\n  this.size = size\n  this.data = new Uint8Array(size * size)\n  this.reservedBit = new Uint8Array(size * size)\n}\n\n/**\n * Set bit value at specified location\n * If reserved flag is set, this bit will be ignored during masking process\n *\n * @param {Number}  row\n * @param {Number}  col\n * @param {Boolean} value\n * @param {Boolean} reserved\n */\nBitMatrix.prototype.set = function (row, col, value, reserved) {\n  const index = row * this.size + col\n  this.data[index] = value\n  if (reserved) this.reservedBit[index] = true\n}\n\n/**\n * Returns bit value at specified location\n *\n * @param  {Number}  row\n * @param  {Number}  col\n * @return {Boolean}\n */\nBitMatrix.prototype.get = function (row, col) {\n  return this.data[row * this.size + col]\n}\n\n/**\n * Applies xor operator at specified location\n * (used during masking process)\n *\n * @param {Number}  row\n * @param {Number}  col\n * @param {Boolean} value\n */\nBitMatrix.prototype.xor = function (row, col, value) {\n  this.data[row * this.size + col] ^= value\n}\n\n/**\n * Check if bit at specified location is reserved\n *\n * @param {Number}   row\n * @param {Number}   col\n * @return {Boolean}\n */\nBitMatrix.prototype.isReserved = function (row, col) {\n  return this.reservedBit[row * this.size + col]\n}\n\nmodule.exports = BitMatrix\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/bit-matrix.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/byte-data.js":
+/*!***************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/byte-data.js ***!
+  \***************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("const encodeUtf8 = __webpack_require__(/*! encode-utf8 */ \"./node_modules/encode-utf8/index.js\")\nconst Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\n\nfunction ByteData (data) {\n  this.mode = Mode.BYTE\n  this.data = new Uint8Array(encodeUtf8(data))\n}\n\nByteData.getBitsLength = function getBitsLength (length) {\n  return length * 8\n}\n\nByteData.prototype.getLength = function getLength () {\n  return this.data.length\n}\n\nByteData.prototype.getBitsLength = function getBitsLength () {\n  return ByteData.getBitsLength(this.data.length)\n}\n\nByteData.prototype.write = function (bitBuffer) {\n  for (let i = 0, l = this.data.length; i < l; i++) {\n    bitBuffer.put(this.data[i], 8)\n  }\n}\n\nmodule.exports = ByteData\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/byte-data.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/error-correction-code.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/error-correction-code.js ***!
+  \***************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const ECLevel = __webpack_require__(/*! ./error-correction-level */ \"./node_modules/qrcode/lib/core/error-correction-level.js\")\r\n\r\nconst EC_BLOCKS_TABLE = [\r\n// L  M  Q  H\r\n  1, 1, 1, 1,\r\n  1, 1, 1, 1,\r\n  1, 1, 2, 2,\r\n  1, 2, 2, 4,\r\n  1, 2, 4, 4,\r\n  2, 4, 4, 4,\r\n  2, 4, 6, 5,\r\n  2, 4, 6, 6,\r\n  2, 5, 8, 8,\r\n  4, 5, 8, 8,\r\n  4, 5, 8, 11,\r\n  4, 8, 10, 11,\r\n  4, 9, 12, 16,\r\n  4, 9, 16, 16,\r\n  6, 10, 12, 18,\r\n  6, 10, 17, 16,\r\n  6, 11, 16, 19,\r\n  6, 13, 18, 21,\r\n  7, 14, 21, 25,\r\n  8, 16, 20, 25,\r\n  8, 17, 23, 25,\r\n  9, 17, 23, 34,\r\n  9, 18, 25, 30,\r\n  10, 20, 27, 32,\r\n  12, 21, 29, 35,\r\n  12, 23, 34, 37,\r\n  12, 25, 34, 40,\r\n  13, 26, 35, 42,\r\n  14, 28, 38, 45,\r\n  15, 29, 40, 48,\r\n  16, 31, 43, 51,\r\n  17, 33, 45, 54,\r\n  18, 35, 48, 57,\r\n  19, 37, 51, 60,\r\n  19, 38, 53, 63,\r\n  20, 40, 56, 66,\r\n  21, 43, 59, 70,\r\n  22, 45, 62, 74,\r\n  24, 47, 65, 77,\r\n  25, 49, 68, 81\r\n]\r\n\r\nconst EC_CODEWORDS_TABLE = [\r\n// L  M  Q  H\r\n  7, 10, 13, 17,\r\n  10, 16, 22, 28,\r\n  15, 26, 36, 44,\r\n  20, 36, 52, 64,\r\n  26, 48, 72, 88,\r\n  36, 64, 96, 112,\r\n  40, 72, 108, 130,\r\n  48, 88, 132, 156,\r\n  60, 110, 160, 192,\r\n  72, 130, 192, 224,\r\n  80, 150, 224, 264,\r\n  96, 176, 260, 308,\r\n  104, 198, 288, 352,\r\n  120, 216, 320, 384,\r\n  132, 240, 360, 432,\r\n  144, 280, 408, 480,\r\n  168, 308, 448, 532,\r\n  180, 338, 504, 588,\r\n  196, 364, 546, 650,\r\n  224, 416, 600, 700,\r\n  224, 442, 644, 750,\r\n  252, 476, 690, 816,\r\n  270, 504, 750, 900,\r\n  300, 560, 810, 960,\r\n  312, 588, 870, 1050,\r\n  336, 644, 952, 1110,\r\n  360, 700, 1020, 1200,\r\n  390, 728, 1050, 1260,\r\n  420, 784, 1140, 1350,\r\n  450, 812, 1200, 1440,\r\n  480, 868, 1290, 1530,\r\n  510, 924, 1350, 1620,\r\n  540, 980, 1440, 1710,\r\n  570, 1036, 1530, 1800,\r\n  570, 1064, 1590, 1890,\r\n  600, 1120, 1680, 1980,\r\n  630, 1204, 1770, 2100,\r\n  660, 1260, 1860, 2220,\r\n  720, 1316, 1950, 2310,\r\n  750, 1372, 2040, 2430\r\n]\r\n\r\n/**\r\n * Returns the number of error correction block that the QR Code should contain\r\n * for the specified version and error correction level.\r\n *\r\n * @param  {Number} version              QR Code version\r\n * @param  {Number} errorCorrectionLevel Error correction level\r\n * @return {Number}                      Number of error correction blocks\r\n */\r\nexports.getBlocksCount = function getBlocksCount (version, errorCorrectionLevel) {\r\n  switch (errorCorrectionLevel) {\r\n    case ECLevel.L:\r\n      return EC_BLOCKS_TABLE[(version - 1) * 4 + 0]\r\n    case ECLevel.M:\r\n      return EC_BLOCKS_TABLE[(version - 1) * 4 + 1]\r\n    case ECLevel.Q:\r\n      return EC_BLOCKS_TABLE[(version - 1) * 4 + 2]\r\n    case ECLevel.H:\r\n      return EC_BLOCKS_TABLE[(version - 1) * 4 + 3]\r\n    default:\r\n      return undefined\r\n  }\r\n}\r\n\r\n/**\r\n * Returns the number of error correction codewords to use for the specified\r\n * version and error correction level.\r\n *\r\n * @param  {Number} version              QR Code version\r\n * @param  {Number} errorCorrectionLevel Error correction level\r\n * @return {Number}                      Number of error correction codewords\r\n */\r\nexports.getTotalCodewordsCount = function getTotalCodewordsCount (version, errorCorrectionLevel) {\r\n  switch (errorCorrectionLevel) {\r\n    case ECLevel.L:\r\n      return EC_CODEWORDS_TABLE[(version - 1) * 4 + 0]\r\n    case ECLevel.M:\r\n      return EC_CODEWORDS_TABLE[(version - 1) * 4 + 1]\r\n    case ECLevel.Q:\r\n      return EC_CODEWORDS_TABLE[(version - 1) * 4 + 2]\r\n    case ECLevel.H:\r\n      return EC_CODEWORDS_TABLE[(version - 1) * 4 + 3]\r\n    default:\r\n      return undefined\r\n  }\r\n}\r\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/error-correction-code.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/error-correction-level.js":
+/*!****************************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/error-correction-level.js ***!
+  \****************************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("exports.L = { bit: 1 }\nexports.M = { bit: 0 }\nexports.Q = { bit: 3 }\nexports.H = { bit: 2 }\n\nfunction fromString (string) {\n  if (typeof string !== 'string') {\n    throw new Error('Param is not a string')\n  }\n\n  const lcStr = string.toLowerCase()\n\n  switch (lcStr) {\n    case 'l':\n    case 'low':\n      return exports.L\n\n    case 'm':\n    case 'medium':\n      return exports.M\n\n    case 'q':\n    case 'quartile':\n      return exports.Q\n\n    case 'h':\n    case 'high':\n      return exports.H\n\n    default:\n      throw new Error('Unknown EC Level: ' + string)\n  }\n}\n\nexports.isValid = function isValid (level) {\n  return level && typeof level.bit !== 'undefined' &&\n    level.bit >= 0 && level.bit < 4\n}\n\nexports.from = function from (value, defaultValue) {\n  if (exports.isValid(value)) {\n    return value\n  }\n\n  try {\n    return fromString(value)\n  } catch (e) {\n    return defaultValue\n  }\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/error-correction-level.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/finder-pattern.js":
+/*!********************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/finder-pattern.js ***!
+  \********************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const getSymbolSize = (__webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\").getSymbolSize)\nconst FINDER_PATTERN_SIZE = 7\n\n/**\n * Returns an array containing the positions of each finder pattern.\n * Each array's element represent the top-left point of the pattern as (x, y) coordinates\n *\n * @param  {Number} version QR Code version\n * @return {Array}          Array of coordinates\n */\nexports.getPositions = function getPositions (version) {\n  const size = getSymbolSize(version)\n\n  return [\n    // top-left\n    [0, 0],\n    // top-right\n    [size - FINDER_PATTERN_SIZE, 0],\n    // bottom-left\n    [0, size - FINDER_PATTERN_SIZE]\n  ]\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/finder-pattern.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/format-info.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/format-info.js ***!
+  \*****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\")\n\nconst G15 = (1 << 10) | (1 << 8) | (1 << 5) | (1 << 4) | (1 << 2) | (1 << 1) | (1 << 0)\nconst G15_MASK = (1 << 14) | (1 << 12) | (1 << 10) | (1 << 4) | (1 << 1)\nconst G15_BCH = Utils.getBCHDigit(G15)\n\n/**\n * Returns format information with relative error correction bits\n *\n * The format information is a 15-bit sequence containing 5 data bits,\n * with 10 error correction bits calculated using the (15, 5) BCH code.\n *\n * @param  {Number} errorCorrectionLevel Error correction level\n * @param  {Number} mask                 Mask pattern\n * @return {Number}                      Encoded format information bits\n */\nexports.getEncodedBits = function getEncodedBits (errorCorrectionLevel, mask) {\n  const data = ((errorCorrectionLevel.bit << 3) | mask)\n  let d = data << 10\n\n  while (Utils.getBCHDigit(d) - G15_BCH >= 0) {\n    d ^= (G15 << (Utils.getBCHDigit(d) - G15_BCH))\n  }\n\n  // xor final data with mask pattern in order to ensure that\n  // no combination of Error Correction Level and data mask pattern\n  // will result in an all-zero data string\n  return ((data << 10) | d) ^ G15_MASK\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/format-info.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/galois-field.js":
+/*!******************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/galois-field.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("const EXP_TABLE = new Uint8Array(512)\nconst LOG_TABLE = new Uint8Array(256)\n/**\n * Precompute the log and anti-log tables for faster computation later\n *\n * For each possible value in the galois field 2^8, we will pre-compute\n * the logarithm and anti-logarithm (exponential) of this value\n *\n * ref {@link https://en.wikiversity.org/wiki/Reed%E2%80%93Solomon_codes_for_coders#Introduction_to_mathematical_fields}\n */\n;(function initTables () {\n  let x = 1\n  for (let i = 0; i < 255; i++) {\n    EXP_TABLE[i] = x\n    LOG_TABLE[x] = i\n\n    x <<= 1 // multiply by 2\n\n    // The QR code specification says to use byte-wise modulo 100011101 arithmetic.\n    // This means that when a number is 256 or larger, it should be XORed with 0x11D.\n    if (x & 0x100) { // similar to x >= 256, but a lot faster (because 0x100 == 256)\n      x ^= 0x11D\n    }\n  }\n\n  // Optimization: double the size of the anti-log table so that we don't need to mod 255 to\n  // stay inside the bounds (because we will mainly use this table for the multiplication of\n  // two GF numbers, no more).\n  // @see {@link mul}\n  for (let i = 255; i < 512; i++) {\n    EXP_TABLE[i] = EXP_TABLE[i - 255]\n  }\n}())\n\n/**\n * Returns log value of n inside Galois Field\n *\n * @param  {Number} n\n * @return {Number}\n */\nexports.log = function log (n) {\n  if (n < 1) throw new Error('log(' + n + ')')\n  return LOG_TABLE[n]\n}\n\n/**\n * Returns anti-log value of n inside Galois Field\n *\n * @param  {Number} n\n * @return {Number}\n */\nexports.exp = function exp (n) {\n  return EXP_TABLE[n]\n}\n\n/**\n * Multiplies two number inside Galois Field\n *\n * @param  {Number} x\n * @param  {Number} y\n * @return {Number}\n */\nexports.mul = function mul (x, y) {\n  if (x === 0 || y === 0) return 0\n\n  // should be EXP_TABLE[(LOG_TABLE[x] + LOG_TABLE[y]) % 255] if EXP_TABLE wasn't oversized\n  // @see {@link initTables}\n  return EXP_TABLE[LOG_TABLE[x] + LOG_TABLE[y]]\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/galois-field.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/kanji-data.js":
+/*!****************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/kanji-data.js ***!
+  \****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("const Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\nconst Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\")\n\nfunction KanjiData (data) {\n  this.mode = Mode.KANJI\n  this.data = data\n}\n\nKanjiData.getBitsLength = function getBitsLength (length) {\n  return length * 13\n}\n\nKanjiData.prototype.getLength = function getLength () {\n  return this.data.length\n}\n\nKanjiData.prototype.getBitsLength = function getBitsLength () {\n  return KanjiData.getBitsLength(this.data.length)\n}\n\nKanjiData.prototype.write = function (bitBuffer) {\n  let i\n\n  // In the Shift JIS system, Kanji characters are represented by a two byte combination.\n  // These byte values are shifted from the JIS X 0208 values.\n  // JIS X 0208 gives details of the shift coded representation.\n  for (i = 0; i < this.data.length; i++) {\n    let value = Utils.toSJIS(this.data[i])\n\n    // For characters with Shift JIS values from 0x8140 to 0x9FFC:\n    if (value >= 0x8140 && value <= 0x9FFC) {\n      // Subtract 0x8140 from Shift JIS value\n      value -= 0x8140\n\n    // For characters with Shift JIS values from 0xE040 to 0xEBBF\n    } else if (value >= 0xE040 && value <= 0xEBBF) {\n      // Subtract 0xC140 from Shift JIS value\n      value -= 0xC140\n    } else {\n      throw new Error(\n        'Invalid SJIS character: ' + this.data[i] + '\\n' +\n        'Make sure your charset is UTF-8')\n    }\n\n    // Multiply most significant byte of result by 0xC0\n    // and add least significant byte to product\n    value = (((value >>> 8) & 0xff) * 0xC0) + (value & 0xff)\n\n    // Convert result to a 13-bit binary string\n    bitBuffer.put(value, 13)\n  }\n}\n\nmodule.exports = KanjiData\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/kanji-data.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/mask-pattern.js":
+/*!******************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/mask-pattern.js ***!
+  \******************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("/**\n * Data mask pattern reference\n * @type {Object}\n */\nexports.Patterns = {\n  PATTERN000: 0,\n  PATTERN001: 1,\n  PATTERN010: 2,\n  PATTERN011: 3,\n  PATTERN100: 4,\n  PATTERN101: 5,\n  PATTERN110: 6,\n  PATTERN111: 7\n}\n\n/**\n * Weighted penalty scores for the undesirable features\n * @type {Object}\n */\nconst PenaltyScores = {\n  N1: 3,\n  N2: 3,\n  N3: 40,\n  N4: 10\n}\n\n/**\n * Check if mask pattern value is valid\n *\n * @param  {Number}  mask    Mask pattern\n * @return {Boolean}         true if valid, false otherwise\n */\nexports.isValid = function isValid (mask) {\n  return mask != null && mask !== '' && !isNaN(mask) && mask >= 0 && mask <= 7\n}\n\n/**\n * Returns mask pattern from a value.\n * If value is not valid, returns undefined\n *\n * @param  {Number|String} value        Mask pattern value\n * @return {Number}                     Valid mask pattern or undefined\n */\nexports.from = function from (value) {\n  return exports.isValid(value) ? parseInt(value, 10) : undefined\n}\n\n/**\n* Find adjacent modules in row/column with the same color\n* and assign a penalty value.\n*\n* Points: N1 + i\n* i is the amount by which the number of adjacent modules of the same color exceeds 5\n*/\nexports.getPenaltyN1 = function getPenaltyN1 (data) {\n  const size = data.size\n  let points = 0\n  let sameCountCol = 0\n  let sameCountRow = 0\n  let lastCol = null\n  let lastRow = null\n\n  for (let row = 0; row < size; row++) {\n    sameCountCol = sameCountRow = 0\n    lastCol = lastRow = null\n\n    for (let col = 0; col < size; col++) {\n      let module = data.get(row, col)\n      if (module === lastCol) {\n        sameCountCol++\n      } else {\n        if (sameCountCol >= 5) points += PenaltyScores.N1 + (sameCountCol - 5)\n        lastCol = module\n        sameCountCol = 1\n      }\n\n      module = data.get(col, row)\n      if (module === lastRow) {\n        sameCountRow++\n      } else {\n        if (sameCountRow >= 5) points += PenaltyScores.N1 + (sameCountRow - 5)\n        lastRow = module\n        sameCountRow = 1\n      }\n    }\n\n    if (sameCountCol >= 5) points += PenaltyScores.N1 + (sameCountCol - 5)\n    if (sameCountRow >= 5) points += PenaltyScores.N1 + (sameCountRow - 5)\n  }\n\n  return points\n}\n\n/**\n * Find 2x2 blocks with the same color and assign a penalty value\n *\n * Points: N2 * (m - 1) * (n - 1)\n */\nexports.getPenaltyN2 = function getPenaltyN2 (data) {\n  const size = data.size\n  let points = 0\n\n  for (let row = 0; row < size - 1; row++) {\n    for (let col = 0; col < size - 1; col++) {\n      const last = data.get(row, col) +\n        data.get(row, col + 1) +\n        data.get(row + 1, col) +\n        data.get(row + 1, col + 1)\n\n      if (last === 4 || last === 0) points++\n    }\n  }\n\n  return points * PenaltyScores.N2\n}\n\n/**\n * Find 1:1:3:1:1 ratio (dark:light:dark:light:dark) pattern in row/column,\n * preceded or followed by light area 4 modules wide\n *\n * Points: N3 * number of pattern found\n */\nexports.getPenaltyN3 = function getPenaltyN3 (data) {\n  const size = data.size\n  let points = 0\n  let bitsCol = 0\n  let bitsRow = 0\n\n  for (let row = 0; row < size; row++) {\n    bitsCol = bitsRow = 0\n    for (let col = 0; col < size; col++) {\n      bitsCol = ((bitsCol << 1) & 0x7FF) | data.get(row, col)\n      if (col >= 10 && (bitsCol === 0x5D0 || bitsCol === 0x05D)) points++\n\n      bitsRow = ((bitsRow << 1) & 0x7FF) | data.get(col, row)\n      if (col >= 10 && (bitsRow === 0x5D0 || bitsRow === 0x05D)) points++\n    }\n  }\n\n  return points * PenaltyScores.N3\n}\n\n/**\n * Calculate proportion of dark modules in entire symbol\n *\n * Points: N4 * k\n *\n * k is the rating of the deviation of the proportion of dark modules\n * in the symbol from 50% in steps of 5%\n */\nexports.getPenaltyN4 = function getPenaltyN4 (data) {\n  let darkCount = 0\n  const modulesCount = data.data.length\n\n  for (let i = 0; i < modulesCount; i++) darkCount += data.data[i]\n\n  const k = Math.abs(Math.ceil((darkCount * 100 / modulesCount) / 5) - 10)\n\n  return k * PenaltyScores.N4\n}\n\n/**\n * Return mask value at given position\n *\n * @param  {Number} maskPattern Pattern reference value\n * @param  {Number} i           Row\n * @param  {Number} j           Column\n * @return {Boolean}            Mask value\n */\nfunction getMaskAt (maskPattern, i, j) {\n  switch (maskPattern) {\n    case exports.Patterns.PATTERN000: return (i + j) % 2 === 0\n    case exports.Patterns.PATTERN001: return i % 2 === 0\n    case exports.Patterns.PATTERN010: return j % 3 === 0\n    case exports.Patterns.PATTERN011: return (i + j) % 3 === 0\n    case exports.Patterns.PATTERN100: return (Math.floor(i / 2) + Math.floor(j / 3)) % 2 === 0\n    case exports.Patterns.PATTERN101: return (i * j) % 2 + (i * j) % 3 === 0\n    case exports.Patterns.PATTERN110: return ((i * j) % 2 + (i * j) % 3) % 2 === 0\n    case exports.Patterns.PATTERN111: return ((i * j) % 3 + (i + j) % 2) % 2 === 0\n\n    default: throw new Error('bad maskPattern:' + maskPattern)\n  }\n}\n\n/**\n * Apply a mask pattern to a BitMatrix\n *\n * @param  {Number}    pattern Pattern reference number\n * @param  {BitMatrix} data    BitMatrix data\n */\nexports.applyMask = function applyMask (pattern, data) {\n  const size = data.size\n\n  for (let col = 0; col < size; col++) {\n    for (let row = 0; row < size; row++) {\n      if (data.isReserved(row, col)) continue\n      data.xor(row, col, getMaskAt(pattern, row, col))\n    }\n  }\n}\n\n/**\n * Returns the best mask pattern for data\n *\n * @param  {BitMatrix} data\n * @return {Number} Mask pattern reference number\n */\nexports.getBestMask = function getBestMask (data, setupFormatFunc) {\n  const numPatterns = Object.keys(exports.Patterns).length\n  let bestPattern = 0\n  let lowerPenalty = Infinity\n\n  for (let p = 0; p < numPatterns; p++) {\n    setupFormatFunc(p)\n    exports.applyMask(p, data)\n\n    // Calculate penalty\n    const penalty =\n      exports.getPenaltyN1(data) +\n      exports.getPenaltyN2(data) +\n      exports.getPenaltyN3(data) +\n      exports.getPenaltyN4(data)\n\n    // Undo previously applied mask\n    exports.applyMask(p, data)\n\n    if (penalty < lowerPenalty) {\n      lowerPenalty = penalty\n      bestPattern = p\n    }\n  }\n\n  return bestPattern\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/mask-pattern.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/mode.js":
+/*!**********************************************!*\
+  !*** ./node_modules/qrcode/lib/core/mode.js ***!
+  \**********************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const VersionCheck = __webpack_require__(/*! ./version-check */ \"./node_modules/qrcode/lib/core/version-check.js\")\nconst Regex = __webpack_require__(/*! ./regex */ \"./node_modules/qrcode/lib/core/regex.js\")\n\n/**\n * Numeric mode encodes data from the decimal digit set (0 - 9)\n * (byte values 30HEX to 39HEX).\n * Normally, 3 data characters are represented by 10 bits.\n *\n * @type {Object}\n */\nexports.NUMERIC = {\n  id: 'Numeric',\n  bit: 1 << 0,\n  ccBits: [10, 12, 14]\n}\n\n/**\n * Alphanumeric mode encodes data from a set of 45 characters,\n * i.e. 10 numeric digits (0 - 9),\n *      26 alphabetic characters (A - Z),\n *   and 9 symbols (SP, $, %, *, +, -, ., /, :).\n * Normally, two input characters are represented by 11 bits.\n *\n * @type {Object}\n */\nexports.ALPHANUMERIC = {\n  id: 'Alphanumeric',\n  bit: 1 << 1,\n  ccBits: [9, 11, 13]\n}\n\n/**\n * In byte mode, data is encoded at 8 bits per character.\n *\n * @type {Object}\n */\nexports.BYTE = {\n  id: 'Byte',\n  bit: 1 << 2,\n  ccBits: [8, 16, 16]\n}\n\n/**\n * The Kanji mode efficiently encodes Kanji characters in accordance with\n * the Shift JIS system based on JIS X 0208.\n * The Shift JIS values are shifted from the JIS X 0208 values.\n * JIS X 0208 gives details of the shift coded representation.\n * Each two-byte character value is compacted to a 13-bit binary codeword.\n *\n * @type {Object}\n */\nexports.KANJI = {\n  id: 'Kanji',\n  bit: 1 << 3,\n  ccBits: [8, 10, 12]\n}\n\n/**\n * Mixed mode will contain a sequences of data in a combination of any of\n * the modes described above\n *\n * @type {Object}\n */\nexports.MIXED = {\n  bit: -1\n}\n\n/**\n * Returns the number of bits needed to store the data length\n * according to QR Code specifications.\n *\n * @param  {Mode}   mode    Data mode\n * @param  {Number} version QR Code version\n * @return {Number}         Number of bits\n */\nexports.getCharCountIndicator = function getCharCountIndicator (mode, version) {\n  if (!mode.ccBits) throw new Error('Invalid mode: ' + mode)\n\n  if (!VersionCheck.isValid(version)) {\n    throw new Error('Invalid version: ' + version)\n  }\n\n  if (version >= 1 && version < 10) return mode.ccBits[0]\n  else if (version < 27) return mode.ccBits[1]\n  return mode.ccBits[2]\n}\n\n/**\n * Returns the most efficient mode to store the specified data\n *\n * @param  {String} dataStr Input data string\n * @return {Mode}           Best mode\n */\nexports.getBestModeForData = function getBestModeForData (dataStr) {\n  if (Regex.testNumeric(dataStr)) return exports.NUMERIC\n  else if (Regex.testAlphanumeric(dataStr)) return exports.ALPHANUMERIC\n  else if (Regex.testKanji(dataStr)) return exports.KANJI\n  else return exports.BYTE\n}\n\n/**\n * Return mode name as string\n *\n * @param {Mode} mode Mode object\n * @returns {String}  Mode name\n */\nexports.toString = function toString (mode) {\n  if (mode && mode.id) return mode.id\n  throw new Error('Invalid mode')\n}\n\n/**\n * Check if input param is a valid mode object\n *\n * @param   {Mode}    mode Mode object\n * @returns {Boolean} True if valid mode, false otherwise\n */\nexports.isValid = function isValid (mode) {\n  return mode && mode.bit && mode.ccBits\n}\n\n/**\n * Get mode object from its name\n *\n * @param   {String} string Mode name\n * @returns {Mode}          Mode object\n */\nfunction fromString (string) {\n  if (typeof string !== 'string') {\n    throw new Error('Param is not a string')\n  }\n\n  const lcStr = string.toLowerCase()\n\n  switch (lcStr) {\n    case 'numeric':\n      return exports.NUMERIC\n    case 'alphanumeric':\n      return exports.ALPHANUMERIC\n    case 'kanji':\n      return exports.KANJI\n    case 'byte':\n      return exports.BYTE\n    default:\n      throw new Error('Unknown mode: ' + string)\n  }\n}\n\n/**\n * Returns mode from a value.\n * If value is not a valid mode, returns defaultValue\n *\n * @param  {Mode|String} value        Encoding mode\n * @param  {Mode}        defaultValue Fallback value\n * @return {Mode}                     Encoding mode\n */\nexports.from = function from (value, defaultValue) {\n  if (exports.isValid(value)) {\n    return value\n  }\n\n  try {\n    return fromString(value)\n  } catch (e) {\n    return defaultValue\n  }\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/mode.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/numeric-data.js":
+/*!******************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/numeric-data.js ***!
+  \******************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("const Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\n\nfunction NumericData (data) {\n  this.mode = Mode.NUMERIC\n  this.data = data.toString()\n}\n\nNumericData.getBitsLength = function getBitsLength (length) {\n  return 10 * Math.floor(length / 3) + ((length % 3) ? ((length % 3) * 3 + 1) : 0)\n}\n\nNumericData.prototype.getLength = function getLength () {\n  return this.data.length\n}\n\nNumericData.prototype.getBitsLength = function getBitsLength () {\n  return NumericData.getBitsLength(this.data.length)\n}\n\nNumericData.prototype.write = function write (bitBuffer) {\n  let i, group, value\n\n  // The input data string is divided into groups of three digits,\n  // and each group is converted to its 10-bit binary equivalent.\n  for (i = 0; i + 3 <= this.data.length; i += 3) {\n    group = this.data.substr(i, 3)\n    value = parseInt(group, 10)\n\n    bitBuffer.put(value, 10)\n  }\n\n  // If the number of input digits is not an exact multiple of three,\n  // the final one or two digits are converted to 4 or 7 bits respectively.\n  const remainingNum = this.data.length - i\n  if (remainingNum > 0) {\n    group = this.data.substr(i)\n    value = parseInt(group, 10)\n\n    bitBuffer.put(value, remainingNum * 3 + 1)\n  }\n}\n\nmodule.exports = NumericData\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/numeric-data.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/polynomial.js":
+/*!****************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/polynomial.js ***!
+  \****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const GF = __webpack_require__(/*! ./galois-field */ \"./node_modules/qrcode/lib/core/galois-field.js\")\n\n/**\n * Multiplies two polynomials inside Galois Field\n *\n * @param  {Uint8Array} p1 Polynomial\n * @param  {Uint8Array} p2 Polynomial\n * @return {Uint8Array}    Product of p1 and p2\n */\nexports.mul = function mul (p1, p2) {\n  const coeff = new Uint8Array(p1.length + p2.length - 1)\n\n  for (let i = 0; i < p1.length; i++) {\n    for (let j = 0; j < p2.length; j++) {\n      coeff[i + j] ^= GF.mul(p1[i], p2[j])\n    }\n  }\n\n  return coeff\n}\n\n/**\n * Calculate the remainder of polynomials division\n *\n * @param  {Uint8Array} divident Polynomial\n * @param  {Uint8Array} divisor  Polynomial\n * @return {Uint8Array}          Remainder\n */\nexports.mod = function mod (divident, divisor) {\n  let result = new Uint8Array(divident)\n\n  while ((result.length - divisor.length) >= 0) {\n    const coeff = result[0]\n\n    for (let i = 0; i < divisor.length; i++) {\n      result[i] ^= GF.mul(divisor[i], coeff)\n    }\n\n    // remove all zeros from buffer head\n    let offset = 0\n    while (offset < result.length && result[offset] === 0) offset++\n    result = result.slice(offset)\n  }\n\n  return result\n}\n\n/**\n * Generate an irreducible generator polynomial of specified degree\n * (used by Reed-Solomon encoder)\n *\n * @param  {Number} degree Degree of the generator polynomial\n * @return {Uint8Array}    Buffer containing polynomial coefficients\n */\nexports.generateECPolynomial = function generateECPolynomial (degree) {\n  let poly = new Uint8Array([1])\n  for (let i = 0; i < degree; i++) {\n    poly = exports.mul(poly, new Uint8Array([1, GF.exp(i)]))\n  }\n\n  return poly\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/polynomial.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/qrcode.js":
+/*!************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/qrcode.js ***!
+  \************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\")\nconst ECLevel = __webpack_require__(/*! ./error-correction-level */ \"./node_modules/qrcode/lib/core/error-correction-level.js\")\nconst BitBuffer = __webpack_require__(/*! ./bit-buffer */ \"./node_modules/qrcode/lib/core/bit-buffer.js\")\nconst BitMatrix = __webpack_require__(/*! ./bit-matrix */ \"./node_modules/qrcode/lib/core/bit-matrix.js\")\nconst AlignmentPattern = __webpack_require__(/*! ./alignment-pattern */ \"./node_modules/qrcode/lib/core/alignment-pattern.js\")\nconst FinderPattern = __webpack_require__(/*! ./finder-pattern */ \"./node_modules/qrcode/lib/core/finder-pattern.js\")\nconst MaskPattern = __webpack_require__(/*! ./mask-pattern */ \"./node_modules/qrcode/lib/core/mask-pattern.js\")\nconst ECCode = __webpack_require__(/*! ./error-correction-code */ \"./node_modules/qrcode/lib/core/error-correction-code.js\")\nconst ReedSolomonEncoder = __webpack_require__(/*! ./reed-solomon-encoder */ \"./node_modules/qrcode/lib/core/reed-solomon-encoder.js\")\nconst Version = __webpack_require__(/*! ./version */ \"./node_modules/qrcode/lib/core/version.js\")\nconst FormatInfo = __webpack_require__(/*! ./format-info */ \"./node_modules/qrcode/lib/core/format-info.js\")\nconst Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\nconst Segments = __webpack_require__(/*! ./segments */ \"./node_modules/qrcode/lib/core/segments.js\")\n\n/**\n * QRCode for JavaScript\n *\n * modified by Ryan Day for nodejs support\n * Copyright (c) 2011 Ryan Day\n *\n * Licensed under the MIT license:\n *   http://www.opensource.org/licenses/mit-license.php\n *\n//---------------------------------------------------------------------\n// QRCode for JavaScript\n//\n// Copyright (c) 2009 Kazuhiko Arase\n//\n// URL: http://www.d-project.com/\n//\n// Licensed under the MIT license:\n//   http://www.opensource.org/licenses/mit-license.php\n//\n// The word \"QR Code\" is registered trademark of\n// DENSO WAVE INCORPORATED\n//   http://www.denso-wave.com/qrcode/faqpatent-e.html\n//\n//---------------------------------------------------------------------\n*/\n\n/**\n * Add finder patterns bits to matrix\n *\n * @param  {BitMatrix} matrix  Modules matrix\n * @param  {Number}    version QR Code version\n */\nfunction setupFinderPattern (matrix, version) {\n  const size = matrix.size\n  const pos = FinderPattern.getPositions(version)\n\n  for (let i = 0; i < pos.length; i++) {\n    const row = pos[i][0]\n    const col = pos[i][1]\n\n    for (let r = -1; r <= 7; r++) {\n      if (row + r <= -1 || size <= row + r) continue\n\n      for (let c = -1; c <= 7; c++) {\n        if (col + c <= -1 || size <= col + c) continue\n\n        if ((r >= 0 && r <= 6 && (c === 0 || c === 6)) ||\n          (c >= 0 && c <= 6 && (r === 0 || r === 6)) ||\n          (r >= 2 && r <= 4 && c >= 2 && c <= 4)) {\n          matrix.set(row + r, col + c, true, true)\n        } else {\n          matrix.set(row + r, col + c, false, true)\n        }\n      }\n    }\n  }\n}\n\n/**\n * Add timing pattern bits to matrix\n *\n * Note: this function must be called before {@link setupAlignmentPattern}\n *\n * @param  {BitMatrix} matrix Modules matrix\n */\nfunction setupTimingPattern (matrix) {\n  const size = matrix.size\n\n  for (let r = 8; r < size - 8; r++) {\n    const value = r % 2 === 0\n    matrix.set(r, 6, value, true)\n    matrix.set(6, r, value, true)\n  }\n}\n\n/**\n * Add alignment patterns bits to matrix\n *\n * Note: this function must be called after {@link setupTimingPattern}\n *\n * @param  {BitMatrix} matrix  Modules matrix\n * @param  {Number}    version QR Code version\n */\nfunction setupAlignmentPattern (matrix, version) {\n  const pos = AlignmentPattern.getPositions(version)\n\n  for (let i = 0; i < pos.length; i++) {\n    const row = pos[i][0]\n    const col = pos[i][1]\n\n    for (let r = -2; r <= 2; r++) {\n      for (let c = -2; c <= 2; c++) {\n        if (r === -2 || r === 2 || c === -2 || c === 2 ||\n          (r === 0 && c === 0)) {\n          matrix.set(row + r, col + c, true, true)\n        } else {\n          matrix.set(row + r, col + c, false, true)\n        }\n      }\n    }\n  }\n}\n\n/**\n * Add version info bits to matrix\n *\n * @param  {BitMatrix} matrix  Modules matrix\n * @param  {Number}    version QR Code version\n */\nfunction setupVersionInfo (matrix, version) {\n  const size = matrix.size\n  const bits = Version.getEncodedBits(version)\n  let row, col, mod\n\n  for (let i = 0; i < 18; i++) {\n    row = Math.floor(i / 3)\n    col = i % 3 + size - 8 - 3\n    mod = ((bits >> i) & 1) === 1\n\n    matrix.set(row, col, mod, true)\n    matrix.set(col, row, mod, true)\n  }\n}\n\n/**\n * Add format info bits to matrix\n *\n * @param  {BitMatrix} matrix               Modules matrix\n * @param  {ErrorCorrectionLevel}    errorCorrectionLevel Error correction level\n * @param  {Number}    maskPattern          Mask pattern reference value\n */\nfunction setupFormatInfo (matrix, errorCorrectionLevel, maskPattern) {\n  const size = matrix.size\n  const bits = FormatInfo.getEncodedBits(errorCorrectionLevel, maskPattern)\n  let i, mod\n\n  for (i = 0; i < 15; i++) {\n    mod = ((bits >> i) & 1) === 1\n\n    // vertical\n    if (i < 6) {\n      matrix.set(i, 8, mod, true)\n    } else if (i < 8) {\n      matrix.set(i + 1, 8, mod, true)\n    } else {\n      matrix.set(size - 15 + i, 8, mod, true)\n    }\n\n    // horizontal\n    if (i < 8) {\n      matrix.set(8, size - i - 1, mod, true)\n    } else if (i < 9) {\n      matrix.set(8, 15 - i - 1 + 1, mod, true)\n    } else {\n      matrix.set(8, 15 - i - 1, mod, true)\n    }\n  }\n\n  // fixed module\n  matrix.set(size - 8, 8, 1, true)\n}\n\n/**\n * Add encoded data bits to matrix\n *\n * @param  {BitMatrix}  matrix Modules matrix\n * @param  {Uint8Array} data   Data codewords\n */\nfunction setupData (matrix, data) {\n  const size = matrix.size\n  let inc = -1\n  let row = size - 1\n  let bitIndex = 7\n  let byteIndex = 0\n\n  for (let col = size - 1; col > 0; col -= 2) {\n    if (col === 6) col--\n\n    while (true) {\n      for (let c = 0; c < 2; c++) {\n        if (!matrix.isReserved(row, col - c)) {\n          let dark = false\n\n          if (byteIndex < data.length) {\n            dark = (((data[byteIndex] >>> bitIndex) & 1) === 1)\n          }\n\n          matrix.set(row, col - c, dark)\n          bitIndex--\n\n          if (bitIndex === -1) {\n            byteIndex++\n            bitIndex = 7\n          }\n        }\n      }\n\n      row += inc\n\n      if (row < 0 || size <= row) {\n        row -= inc\n        inc = -inc\n        break\n      }\n    }\n  }\n}\n\n/**\n * Create encoded codewords from data input\n *\n * @param  {Number}   version              QR Code version\n * @param  {ErrorCorrectionLevel}   errorCorrectionLevel Error correction level\n * @param  {ByteData} data                 Data input\n * @return {Uint8Array}                    Buffer containing encoded codewords\n */\nfunction createData (version, errorCorrectionLevel, segments) {\n  // Prepare data buffer\n  const buffer = new BitBuffer()\n\n  segments.forEach(function (data) {\n    // prefix data with mode indicator (4 bits)\n    buffer.put(data.mode.bit, 4)\n\n    // Prefix data with character count indicator.\n    // The character count indicator is a string of bits that represents the\n    // number of characters that are being encoded.\n    // The character count indicator must be placed after the mode indicator\n    // and must be a certain number of bits long, depending on the QR version\n    // and data mode\n    // @see {@link Mode.getCharCountIndicator}.\n    buffer.put(data.getLength(), Mode.getCharCountIndicator(data.mode, version))\n\n    // add binary data sequence to buffer\n    data.write(buffer)\n  })\n\n  // Calculate required number of bits\n  const totalCodewords = Utils.getSymbolTotalCodewords(version)\n  const ecTotalCodewords = ECCode.getTotalCodewordsCount(version, errorCorrectionLevel)\n  const dataTotalCodewordsBits = (totalCodewords - ecTotalCodewords) * 8\n\n  // Add a terminator.\n  // If the bit string is shorter than the total number of required bits,\n  // a terminator of up to four 0s must be added to the right side of the string.\n  // If the bit string is more than four bits shorter than the required number of bits,\n  // add four 0s to the end.\n  if (buffer.getLengthInBits() + 4 <= dataTotalCodewordsBits) {\n    buffer.put(0, 4)\n  }\n\n  // If the bit string is fewer than four bits shorter, add only the number of 0s that\n  // are needed to reach the required number of bits.\n\n  // After adding the terminator, if the number of bits in the string is not a multiple of 8,\n  // pad the string on the right with 0s to make the string's length a multiple of 8.\n  while (buffer.getLengthInBits() % 8 !== 0) {\n    buffer.putBit(0)\n  }\n\n  // Add pad bytes if the string is still shorter than the total number of required bits.\n  // Extend the buffer to fill the data capacity of the symbol corresponding to\n  // the Version and Error Correction Level by adding the Pad Codewords 11101100 (0xEC)\n  // and 00010001 (0x11) alternately.\n  const remainingByte = (dataTotalCodewordsBits - buffer.getLengthInBits()) / 8\n  for (let i = 0; i < remainingByte; i++) {\n    buffer.put(i % 2 ? 0x11 : 0xEC, 8)\n  }\n\n  return createCodewords(buffer, version, errorCorrectionLevel)\n}\n\n/**\n * Encode input data with Reed-Solomon and return codewords with\n * relative error correction bits\n *\n * @param  {BitBuffer} bitBuffer            Data to encode\n * @param  {Number}    version              QR Code version\n * @param  {ErrorCorrectionLevel} errorCorrectionLevel Error correction level\n * @return {Uint8Array}                     Buffer containing encoded codewords\n */\nfunction createCodewords (bitBuffer, version, errorCorrectionLevel) {\n  // Total codewords for this QR code version (Data + Error correction)\n  const totalCodewords = Utils.getSymbolTotalCodewords(version)\n\n  // Total number of error correction codewords\n  const ecTotalCodewords = ECCode.getTotalCodewordsCount(version, errorCorrectionLevel)\n\n  // Total number of data codewords\n  const dataTotalCodewords = totalCodewords - ecTotalCodewords\n\n  // Total number of blocks\n  const ecTotalBlocks = ECCode.getBlocksCount(version, errorCorrectionLevel)\n\n  // Calculate how many blocks each group should contain\n  const blocksInGroup2 = totalCodewords % ecTotalBlocks\n  const blocksInGroup1 = ecTotalBlocks - blocksInGroup2\n\n  const totalCodewordsInGroup1 = Math.floor(totalCodewords / ecTotalBlocks)\n\n  const dataCodewordsInGroup1 = Math.floor(dataTotalCodewords / ecTotalBlocks)\n  const dataCodewordsInGroup2 = dataCodewordsInGroup1 + 1\n\n  // Number of EC codewords is the same for both groups\n  const ecCount = totalCodewordsInGroup1 - dataCodewordsInGroup1\n\n  // Initialize a Reed-Solomon encoder with a generator polynomial of degree ecCount\n  const rs = new ReedSolomonEncoder(ecCount)\n\n  let offset = 0\n  const dcData = new Array(ecTotalBlocks)\n  const ecData = new Array(ecTotalBlocks)\n  let maxDataSize = 0\n  const buffer = new Uint8Array(bitBuffer.buffer)\n\n  // Divide the buffer into the required number of blocks\n  for (let b = 0; b < ecTotalBlocks; b++) {\n    const dataSize = b < blocksInGroup1 ? dataCodewordsInGroup1 : dataCodewordsInGroup2\n\n    // extract a block of data from buffer\n    dcData[b] = buffer.slice(offset, offset + dataSize)\n\n    // Calculate EC codewords for this data block\n    ecData[b] = rs.encode(dcData[b])\n\n    offset += dataSize\n    maxDataSize = Math.max(maxDataSize, dataSize)\n  }\n\n  // Create final data\n  // Interleave the data and error correction codewords from each block\n  const data = new Uint8Array(totalCodewords)\n  let index = 0\n  let i, r\n\n  // Add data codewords\n  for (i = 0; i < maxDataSize; i++) {\n    for (r = 0; r < ecTotalBlocks; r++) {\n      if (i < dcData[r].length) {\n        data[index++] = dcData[r][i]\n      }\n    }\n  }\n\n  // Apped EC codewords\n  for (i = 0; i < ecCount; i++) {\n    for (r = 0; r < ecTotalBlocks; r++) {\n      data[index++] = ecData[r][i]\n    }\n  }\n\n  return data\n}\n\n/**\n * Build QR Code symbol\n *\n * @param  {String} data                 Input string\n * @param  {Number} version              QR Code version\n * @param  {ErrorCorretionLevel} errorCorrectionLevel Error level\n * @param  {MaskPattern} maskPattern     Mask pattern\n * @return {Object}                      Object containing symbol data\n */\nfunction createSymbol (data, version, errorCorrectionLevel, maskPattern) {\n  let segments\n\n  if (Array.isArray(data)) {\n    segments = Segments.fromArray(data)\n  } else if (typeof data === 'string') {\n    let estimatedVersion = version\n\n    if (!estimatedVersion) {\n      const rawSegments = Segments.rawSplit(data)\n\n      // Estimate best version that can contain raw splitted segments\n      estimatedVersion = Version.getBestVersionForData(rawSegments, errorCorrectionLevel)\n    }\n\n    // Build optimized segments\n    // If estimated version is undefined, try with the highest version\n    segments = Segments.fromString(data, estimatedVersion || 40)\n  } else {\n    throw new Error('Invalid data')\n  }\n\n  // Get the min version that can contain data\n  const bestVersion = Version.getBestVersionForData(segments, errorCorrectionLevel)\n\n  // If no version is found, data cannot be stored\n  if (!bestVersion) {\n    throw new Error('The amount of data is too big to be stored in a QR Code')\n  }\n\n  // If not specified, use min version as default\n  if (!version) {\n    version = bestVersion\n\n  // Check if the specified version can contain the data\n  } else if (version < bestVersion) {\n    throw new Error('\\n' +\n      'The chosen QR Code version cannot contain this amount of data.\\n' +\n      'Minimum version required to store current data is: ' + bestVersion + '.\\n'\n    )\n  }\n\n  const dataBits = createData(version, errorCorrectionLevel, segments)\n\n  // Allocate matrix buffer\n  const moduleCount = Utils.getSymbolSize(version)\n  const modules = new BitMatrix(moduleCount)\n\n  // Add function modules\n  setupFinderPattern(modules, version)\n  setupTimingPattern(modules)\n  setupAlignmentPattern(modules, version)\n\n  // Add temporary dummy bits for format info just to set them as reserved.\n  // This is needed to prevent these bits from being masked by {@link MaskPattern.applyMask}\n  // since the masking operation must be performed only on the encoding region.\n  // These blocks will be replaced with correct values later in code.\n  setupFormatInfo(modules, errorCorrectionLevel, 0)\n\n  if (version >= 7) {\n    setupVersionInfo(modules, version)\n  }\n\n  // Add data codewords\n  setupData(modules, dataBits)\n\n  if (isNaN(maskPattern)) {\n    // Find best mask pattern\n    maskPattern = MaskPattern.getBestMask(modules,\n      setupFormatInfo.bind(null, modules, errorCorrectionLevel))\n  }\n\n  // Apply mask pattern\n  MaskPattern.applyMask(maskPattern, modules)\n\n  // Replace format info bits with correct values\n  setupFormatInfo(modules, errorCorrectionLevel, maskPattern)\n\n  return {\n    modules: modules,\n    version: version,\n    errorCorrectionLevel: errorCorrectionLevel,\n    maskPattern: maskPattern,\n    segments: segments\n  }\n}\n\n/**\n * QR Code\n *\n * @param {String | Array} data                 Input data\n * @param {Object} options                      Optional configurations\n * @param {Number} options.version              QR Code version\n * @param {String} options.errorCorrectionLevel Error correction level\n * @param {Function} options.toSJISFunc         Helper func to convert utf8 to sjis\n */\nexports.create = function create (data, options) {\n  if (typeof data === 'undefined' || data === '') {\n    throw new Error('No input text')\n  }\n\n  let errorCorrectionLevel = ECLevel.M\n  let version\n  let mask\n\n  if (typeof options !== 'undefined') {\n    // Use higher error correction level as default\n    errorCorrectionLevel = ECLevel.from(options.errorCorrectionLevel, ECLevel.M)\n    version = Version.from(options.version)\n    mask = MaskPattern.from(options.maskPattern)\n\n    if (options.toSJISFunc) {\n      Utils.setToSJISFunction(options.toSJISFunc)\n    }\n  }\n\n  return createSymbol(data, version, errorCorrectionLevel, mask)\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/qrcode.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/reed-solomon-encoder.js":
+/*!**************************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/reed-solomon-encoder.js ***!
+  \**************************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+eval("const Polynomial = __webpack_require__(/*! ./polynomial */ \"./node_modules/qrcode/lib/core/polynomial.js\")\n\nfunction ReedSolomonEncoder (degree) {\n  this.genPoly = undefined\n  this.degree = degree\n\n  if (this.degree) this.initialize(this.degree)\n}\n\n/**\n * Initialize the encoder.\n * The input param should correspond to the number of error correction codewords.\n *\n * @param  {Number} degree\n */\nReedSolomonEncoder.prototype.initialize = function initialize (degree) {\n  // create an irreducible generator polynomial\n  this.degree = degree\n  this.genPoly = Polynomial.generateECPolynomial(this.degree)\n}\n\n/**\n * Encodes a chunk of data\n *\n * @param  {Uint8Array} data Buffer containing input data\n * @return {Uint8Array}      Buffer containing encoded data\n */\nReedSolomonEncoder.prototype.encode = function encode (data) {\n  if (!this.genPoly) {\n    throw new Error('Encoder not initialized')\n  }\n\n  // Calculate EC for this data block\n  // extends data size to data+genPoly size\n  const paddedData = new Uint8Array(data.length + this.degree)\n  paddedData.set(data)\n\n  // The error correction codewords are the remainder after dividing the data codewords\n  // by a generator polynomial\n  const remainder = Polynomial.mod(paddedData, this.genPoly)\n\n  // return EC data blocks (last n byte, where n is the degree of genPoly)\n  // If coefficients number in remainder are less than genPoly degree,\n  // pad with 0s to the left to reach the needed number of coefficients\n  const start = this.degree - remainder.length\n  if (start > 0) {\n    const buff = new Uint8Array(this.degree)\n    buff.set(remainder, start)\n\n    return buff\n  }\n\n  return remainder\n}\n\nmodule.exports = ReedSolomonEncoder\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/reed-solomon-encoder.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/regex.js":
+/*!***********************************************!*\
+  !*** ./node_modules/qrcode/lib/core/regex.js ***!
+  \***********************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("const numeric = '[0-9]+'\nconst alphanumeric = '[A-Z $%*+\\\\-./:]+'\nlet kanji = '(?:[u3000-u303F]|[u3040-u309F]|[u30A0-u30FF]|' +\n  '[uFF00-uFFEF]|[u4E00-u9FAF]|[u2605-u2606]|[u2190-u2195]|u203B|' +\n  '[u2010u2015u2018u2019u2025u2026u201Cu201Du2225u2260]|' +\n  '[u0391-u0451]|[u00A7u00A8u00B1u00B4u00D7u00F7])+'\nkanji = kanji.replace(/u/g, '\\\\u')\n\nconst byte = '(?:(?![A-Z0-9 $%*+\\\\-./:]|' + kanji + ')(?:.|[\\r\\n]))+'\n\nexports.KANJI = new RegExp(kanji, 'g')\nexports.BYTE_KANJI = new RegExp('[^A-Z0-9 $%*+\\\\-./:]+', 'g')\nexports.BYTE = new RegExp(byte, 'g')\nexports.NUMERIC = new RegExp(numeric, 'g')\nexports.ALPHANUMERIC = new RegExp(alphanumeric, 'g')\n\nconst TEST_KANJI = new RegExp('^' + kanji + '$')\nconst TEST_NUMERIC = new RegExp('^' + numeric + '$')\nconst TEST_ALPHANUMERIC = new RegExp('^[A-Z0-9 $%*+\\\\-./:]+$')\n\nexports.testKanji = function testKanji (str) {\n  return TEST_KANJI.test(str)\n}\n\nexports.testNumeric = function testNumeric (str) {\n  return TEST_NUMERIC.test(str)\n}\n\nexports.testAlphanumeric = function testAlphanumeric (str) {\n  return TEST_ALPHANUMERIC.test(str)\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/regex.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/segments.js":
+/*!**************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/segments.js ***!
+  \**************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\nconst NumericData = __webpack_require__(/*! ./numeric-data */ \"./node_modules/qrcode/lib/core/numeric-data.js\")\nconst AlphanumericData = __webpack_require__(/*! ./alphanumeric-data */ \"./node_modules/qrcode/lib/core/alphanumeric-data.js\")\nconst ByteData = __webpack_require__(/*! ./byte-data */ \"./node_modules/qrcode/lib/core/byte-data.js\")\nconst KanjiData = __webpack_require__(/*! ./kanji-data */ \"./node_modules/qrcode/lib/core/kanji-data.js\")\nconst Regex = __webpack_require__(/*! ./regex */ \"./node_modules/qrcode/lib/core/regex.js\")\nconst Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\")\nconst dijkstra = __webpack_require__(/*! dijkstrajs */ \"./node_modules/dijkstrajs/dijkstra.js\")\n\n/**\n * Returns UTF8 byte length\n *\n * @param  {String} str Input string\n * @return {Number}     Number of byte\n */\nfunction getStringByteLength (str) {\n  return unescape(encodeURIComponent(str)).length\n}\n\n/**\n * Get a list of segments of the specified mode\n * from a string\n *\n * @param  {Mode}   mode Segment mode\n * @param  {String} str  String to process\n * @return {Array}       Array of object with segments data\n */\nfunction getSegments (regex, mode, str) {\n  const segments = []\n  let result\n\n  while ((result = regex.exec(str)) !== null) {\n    segments.push({\n      data: result[0],\n      index: result.index,\n      mode: mode,\n      length: result[0].length\n    })\n  }\n\n  return segments\n}\n\n/**\n * Extracts a series of segments with the appropriate\n * modes from a string\n *\n * @param  {String} dataStr Input string\n * @return {Array}          Array of object with segments data\n */\nfunction getSegmentsFromString (dataStr) {\n  const numSegs = getSegments(Regex.NUMERIC, Mode.NUMERIC, dataStr)\n  const alphaNumSegs = getSegments(Regex.ALPHANUMERIC, Mode.ALPHANUMERIC, dataStr)\n  let byteSegs\n  let kanjiSegs\n\n  if (Utils.isKanjiModeEnabled()) {\n    byteSegs = getSegments(Regex.BYTE, Mode.BYTE, dataStr)\n    kanjiSegs = getSegments(Regex.KANJI, Mode.KANJI, dataStr)\n  } else {\n    byteSegs = getSegments(Regex.BYTE_KANJI, Mode.BYTE, dataStr)\n    kanjiSegs = []\n  }\n\n  const segs = numSegs.concat(alphaNumSegs, byteSegs, kanjiSegs)\n\n  return segs\n    .sort(function (s1, s2) {\n      return s1.index - s2.index\n    })\n    .map(function (obj) {\n      return {\n        data: obj.data,\n        mode: obj.mode,\n        length: obj.length\n      }\n    })\n}\n\n/**\n * Returns how many bits are needed to encode a string of\n * specified length with the specified mode\n *\n * @param  {Number} length String length\n * @param  {Mode} mode     Segment mode\n * @return {Number}        Bit length\n */\nfunction getSegmentBitsLength (length, mode) {\n  switch (mode) {\n    case Mode.NUMERIC:\n      return NumericData.getBitsLength(length)\n    case Mode.ALPHANUMERIC:\n      return AlphanumericData.getBitsLength(length)\n    case Mode.KANJI:\n      return KanjiData.getBitsLength(length)\n    case Mode.BYTE:\n      return ByteData.getBitsLength(length)\n  }\n}\n\n/**\n * Merges adjacent segments which have the same mode\n *\n * @param  {Array} segs Array of object with segments data\n * @return {Array}      Array of object with segments data\n */\nfunction mergeSegments (segs) {\n  return segs.reduce(function (acc, curr) {\n    const prevSeg = acc.length - 1 >= 0 ? acc[acc.length - 1] : null\n    if (prevSeg && prevSeg.mode === curr.mode) {\n      acc[acc.length - 1].data += curr.data\n      return acc\n    }\n\n    acc.push(curr)\n    return acc\n  }, [])\n}\n\n/**\n * Generates a list of all possible nodes combination which\n * will be used to build a segments graph.\n *\n * Nodes are divided by groups. Each group will contain a list of all the modes\n * in which is possible to encode the given text.\n *\n * For example the text '12345' can be encoded as Numeric, Alphanumeric or Byte.\n * The group for '12345' will contain then 3 objects, one for each\n * possible encoding mode.\n *\n * Each node represents a possible segment.\n *\n * @param  {Array} segs Array of object with segments data\n * @return {Array}      Array of object with segments data\n */\nfunction buildNodes (segs) {\n  const nodes = []\n  for (let i = 0; i < segs.length; i++) {\n    const seg = segs[i]\n\n    switch (seg.mode) {\n      case Mode.NUMERIC:\n        nodes.push([seg,\n          { data: seg.data, mode: Mode.ALPHANUMERIC, length: seg.length },\n          { data: seg.data, mode: Mode.BYTE, length: seg.length }\n        ])\n        break\n      case Mode.ALPHANUMERIC:\n        nodes.push([seg,\n          { data: seg.data, mode: Mode.BYTE, length: seg.length }\n        ])\n        break\n      case Mode.KANJI:\n        nodes.push([seg,\n          { data: seg.data, mode: Mode.BYTE, length: getStringByteLength(seg.data) }\n        ])\n        break\n      case Mode.BYTE:\n        nodes.push([\n          { data: seg.data, mode: Mode.BYTE, length: getStringByteLength(seg.data) }\n        ])\n    }\n  }\n\n  return nodes\n}\n\n/**\n * Builds a graph from a list of nodes.\n * All segments in each node group will be connected with all the segments of\n * the next group and so on.\n *\n * At each connection will be assigned a weight depending on the\n * segment's byte length.\n *\n * @param  {Array} nodes    Array of object with segments data\n * @param  {Number} version QR Code version\n * @return {Object}         Graph of all possible segments\n */\nfunction buildGraph (nodes, version) {\n  const table = {}\n  const graph = { start: {} }\n  let prevNodeIds = ['start']\n\n  for (let i = 0; i < nodes.length; i++) {\n    const nodeGroup = nodes[i]\n    const currentNodeIds = []\n\n    for (let j = 0; j < nodeGroup.length; j++) {\n      const node = nodeGroup[j]\n      const key = '' + i + j\n\n      currentNodeIds.push(key)\n      table[key] = { node: node, lastCount: 0 }\n      graph[key] = {}\n\n      for (let n = 0; n < prevNodeIds.length; n++) {\n        const prevNodeId = prevNodeIds[n]\n\n        if (table[prevNodeId] && table[prevNodeId].node.mode === node.mode) {\n          graph[prevNodeId][key] =\n            getSegmentBitsLength(table[prevNodeId].lastCount + node.length, node.mode) -\n            getSegmentBitsLength(table[prevNodeId].lastCount, node.mode)\n\n          table[prevNodeId].lastCount += node.length\n        } else {\n          if (table[prevNodeId]) table[prevNodeId].lastCount = node.length\n\n          graph[prevNodeId][key] = getSegmentBitsLength(node.length, node.mode) +\n            4 + Mode.getCharCountIndicator(node.mode, version) // switch cost\n        }\n      }\n    }\n\n    prevNodeIds = currentNodeIds\n  }\n\n  for (let n = 0; n < prevNodeIds.length; n++) {\n    graph[prevNodeIds[n]].end = 0\n  }\n\n  return { map: graph, table: table }\n}\n\n/**\n * Builds a segment from a specified data and mode.\n * If a mode is not specified, the more suitable will be used.\n *\n * @param  {String} data             Input data\n * @param  {Mode | String} modesHint Data mode\n * @return {Segment}                 Segment\n */\nfunction buildSingleSegment (data, modesHint) {\n  let mode\n  const bestMode = Mode.getBestModeForData(data)\n\n  mode = Mode.from(modesHint, bestMode)\n\n  // Make sure data can be encoded\n  if (mode !== Mode.BYTE && mode.bit < bestMode.bit) {\n    throw new Error('\"' + data + '\"' +\n      ' cannot be encoded with mode ' + Mode.toString(mode) +\n      '.\\n Suggested mode is: ' + Mode.toString(bestMode))\n  }\n\n  // Use Mode.BYTE if Kanji support is disabled\n  if (mode === Mode.KANJI && !Utils.isKanjiModeEnabled()) {\n    mode = Mode.BYTE\n  }\n\n  switch (mode) {\n    case Mode.NUMERIC:\n      return new NumericData(data)\n\n    case Mode.ALPHANUMERIC:\n      return new AlphanumericData(data)\n\n    case Mode.KANJI:\n      return new KanjiData(data)\n\n    case Mode.BYTE:\n      return new ByteData(data)\n  }\n}\n\n/**\n * Builds a list of segments from an array.\n * Array can contain Strings or Objects with segment's info.\n *\n * For each item which is a string, will be generated a segment with the given\n * string and the more appropriate encoding mode.\n *\n * For each item which is an object, will be generated a segment with the given\n * data and mode.\n * Objects must contain at least the property \"data\".\n * If property \"mode\" is not present, the more suitable mode will be used.\n *\n * @param  {Array} array Array of objects with segments data\n * @return {Array}       Array of Segments\n */\nexports.fromArray = function fromArray (array) {\n  return array.reduce(function (acc, seg) {\n    if (typeof seg === 'string') {\n      acc.push(buildSingleSegment(seg, null))\n    } else if (seg.data) {\n      acc.push(buildSingleSegment(seg.data, seg.mode))\n    }\n\n    return acc\n  }, [])\n}\n\n/**\n * Builds an optimized sequence of segments from a string,\n * which will produce the shortest possible bitstream.\n *\n * @param  {String} data    Input string\n * @param  {Number} version QR Code version\n * @return {Array}          Array of segments\n */\nexports.fromString = function fromString (data, version) {\n  const segs = getSegmentsFromString(data, Utils.isKanjiModeEnabled())\n\n  const nodes = buildNodes(segs)\n  const graph = buildGraph(nodes, version)\n  const path = dijkstra.find_path(graph.map, 'start', 'end')\n\n  const optimizedSegs = []\n  for (let i = 1; i < path.length - 1; i++) {\n    optimizedSegs.push(graph.table[path[i]].node)\n  }\n\n  return exports.fromArray(mergeSegments(optimizedSegs))\n}\n\n/**\n * Splits a string in various segments with the modes which\n * best represent their content.\n * The produced segments are far from being optimized.\n * The output of this function is only used to estimate a QR Code version\n * which may contain the data.\n *\n * @param  {string} data Input string\n * @return {Array}       Array of segments\n */\nexports.rawSplit = function rawSplit (data) {\n  return exports.fromArray(\n    getSegmentsFromString(data, Utils.isKanjiModeEnabled())\n  )\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/segments.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/utils.js":
+/*!***********************************************!*\
+  !*** ./node_modules/qrcode/lib/core/utils.js ***!
+  \***********************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("let toSJISFunction\nconst CODEWORDS_COUNT = [\n  0, // Not used\n  26, 44, 70, 100, 134, 172, 196, 242, 292, 346,\n  404, 466, 532, 581, 655, 733, 815, 901, 991, 1085,\n  1156, 1258, 1364, 1474, 1588, 1706, 1828, 1921, 2051, 2185,\n  2323, 2465, 2611, 2761, 2876, 3034, 3196, 3362, 3532, 3706\n]\n\n/**\n * Returns the QR Code size for the specified version\n *\n * @param  {Number} version QR Code version\n * @return {Number}         size of QR code\n */\nexports.getSymbolSize = function getSymbolSize (version) {\n  if (!version) throw new Error('\"version\" cannot be null or undefined')\n  if (version < 1 || version > 40) throw new Error('\"version\" should be in range from 1 to 40')\n  return version * 4 + 17\n}\n\n/**\n * Returns the total number of codewords used to store data and EC information.\n *\n * @param  {Number} version QR Code version\n * @return {Number}         Data length in bits\n */\nexports.getSymbolTotalCodewords = function getSymbolTotalCodewords (version) {\n  return CODEWORDS_COUNT[version]\n}\n\n/**\n * Encode data with Bose-Chaudhuri-Hocquenghem\n *\n * @param  {Number} data Value to encode\n * @return {Number}      Encoded value\n */\nexports.getBCHDigit = function (data) {\n  let digit = 0\n\n  while (data !== 0) {\n    digit++\n    data >>>= 1\n  }\n\n  return digit\n}\n\nexports.setToSJISFunction = function setToSJISFunction (f) {\n  if (typeof f !== 'function') {\n    throw new Error('\"toSJISFunc\" is not a valid function.')\n  }\n\n  toSJISFunction = f\n}\n\nexports.isKanjiModeEnabled = function () {\n  return typeof toSJISFunction !== 'undefined'\n}\n\nexports.toSJIS = function toSJIS (kanji) {\n  return toSJISFunction(kanji)\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/utils.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/version-check.js":
+/*!*******************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/version-check.js ***!
+  \*******************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("/**\n * Check if QR Code version is valid\n *\n * @param  {Number}  version QR Code version\n * @return {Boolean}         true if valid version, false otherwise\n */\nexports.isValid = function isValid (version) {\n  return !isNaN(version) && version >= 1 && version <= 40\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/version-check.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/core/version.js":
+/*!*************************************************!*\
+  !*** ./node_modules/qrcode/lib/core/version.js ***!
+  \*************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/core/utils.js\")\nconst ECCode = __webpack_require__(/*! ./error-correction-code */ \"./node_modules/qrcode/lib/core/error-correction-code.js\")\nconst ECLevel = __webpack_require__(/*! ./error-correction-level */ \"./node_modules/qrcode/lib/core/error-correction-level.js\")\nconst Mode = __webpack_require__(/*! ./mode */ \"./node_modules/qrcode/lib/core/mode.js\")\nconst VersionCheck = __webpack_require__(/*! ./version-check */ \"./node_modules/qrcode/lib/core/version-check.js\")\n\n// Generator polynomial used to encode version information\nconst G18 = (1 << 12) | (1 << 11) | (1 << 10) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 2) | (1 << 0)\nconst G18_BCH = Utils.getBCHDigit(G18)\n\nfunction getBestVersionForDataLength (mode, length, errorCorrectionLevel) {\n  for (let currentVersion = 1; currentVersion <= 40; currentVersion++) {\n    if (length <= exports.getCapacity(currentVersion, errorCorrectionLevel, mode)) {\n      return currentVersion\n    }\n  }\n\n  return undefined\n}\n\nfunction getReservedBitsCount (mode, version) {\n  // Character count indicator + mode indicator bits\n  return Mode.getCharCountIndicator(mode, version) + 4\n}\n\nfunction getTotalBitsFromDataArray (segments, version) {\n  let totalBits = 0\n\n  segments.forEach(function (data) {\n    const reservedBits = getReservedBitsCount(data.mode, version)\n    totalBits += reservedBits + data.getBitsLength()\n  })\n\n  return totalBits\n}\n\nfunction getBestVersionForMixedData (segments, errorCorrectionLevel) {\n  for (let currentVersion = 1; currentVersion <= 40; currentVersion++) {\n    const length = getTotalBitsFromDataArray(segments, currentVersion)\n    if (length <= exports.getCapacity(currentVersion, errorCorrectionLevel, Mode.MIXED)) {\n      return currentVersion\n    }\n  }\n\n  return undefined\n}\n\n/**\n * Returns version number from a value.\n * If value is not a valid version, returns defaultValue\n *\n * @param  {Number|String} value        QR Code version\n * @param  {Number}        defaultValue Fallback value\n * @return {Number}                     QR Code version number\n */\nexports.from = function from (value, defaultValue) {\n  if (VersionCheck.isValid(value)) {\n    return parseInt(value, 10)\n  }\n\n  return defaultValue\n}\n\n/**\n * Returns how much data can be stored with the specified QR code version\n * and error correction level\n *\n * @param  {Number} version              QR Code version (1-40)\n * @param  {Number} errorCorrectionLevel Error correction level\n * @param  {Mode}   mode                 Data mode\n * @return {Number}                      Quantity of storable data\n */\nexports.getCapacity = function getCapacity (version, errorCorrectionLevel, mode) {\n  if (!VersionCheck.isValid(version)) {\n    throw new Error('Invalid QR Code version')\n  }\n\n  // Use Byte mode as default\n  if (typeof mode === 'undefined') mode = Mode.BYTE\n\n  // Total codewords for this QR code version (Data + Error correction)\n  const totalCodewords = Utils.getSymbolTotalCodewords(version)\n\n  // Total number of error correction codewords\n  const ecTotalCodewords = ECCode.getTotalCodewordsCount(version, errorCorrectionLevel)\n\n  // Total number of data codewords\n  const dataTotalCodewordsBits = (totalCodewords - ecTotalCodewords) * 8\n\n  if (mode === Mode.MIXED) return dataTotalCodewordsBits\n\n  const usableBits = dataTotalCodewordsBits - getReservedBitsCount(mode, version)\n\n  // Return max number of storable codewords\n  switch (mode) {\n    case Mode.NUMERIC:\n      return Math.floor((usableBits / 10) * 3)\n\n    case Mode.ALPHANUMERIC:\n      return Math.floor((usableBits / 11) * 2)\n\n    case Mode.KANJI:\n      return Math.floor(usableBits / 13)\n\n    case Mode.BYTE:\n    default:\n      return Math.floor(usableBits / 8)\n  }\n}\n\n/**\n * Returns the minimum version needed to contain the amount of data\n *\n * @param  {Segment} data                    Segment of data\n * @param  {Number} [errorCorrectionLevel=H] Error correction level\n * @param  {Mode} mode                       Data mode\n * @return {Number}                          QR Code version\n */\nexports.getBestVersionForData = function getBestVersionForData (data, errorCorrectionLevel) {\n  let seg\n\n  const ecl = ECLevel.from(errorCorrectionLevel, ECLevel.M)\n\n  if (Array.isArray(data)) {\n    if (data.length > 1) {\n      return getBestVersionForMixedData(data, ecl)\n    }\n\n    if (data.length === 0) {\n      return 1\n    }\n\n    seg = data[0]\n  } else {\n    seg = data\n  }\n\n  return getBestVersionForDataLength(seg.mode, seg.getLength(), ecl)\n}\n\n/**\n * Returns version information with relative error correction bits\n *\n * The version information is included in QR Code symbols of version 7 or larger.\n * It consists of an 18-bit sequence containing 6 data bits,\n * with 12 error correction bits calculated using the (18, 6) Golay code.\n *\n * @param  {Number} version QR Code version\n * @return {Number}         Encoded version info bits\n */\nexports.getEncodedBits = function getEncodedBits (version) {\n  if (!VersionCheck.isValid(version) || version < 7) {\n    throw new Error('Invalid QR Code version')\n  }\n\n  let d = version << 12\n\n  while (Utils.getBCHDigit(d) - G18_BCH >= 0) {\n    d ^= (G18 << (Utils.getBCHDigit(d) - G18_BCH))\n  }\n\n  return (version << 12) | d\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/core/version.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/renderer/canvas.js":
+/*!****************************************************!*\
+  !*** ./node_modules/qrcode/lib/renderer/canvas.js ***!
+  \****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/renderer/utils.js\")\n\nfunction clearCanvas (ctx, canvas, size) {\n  ctx.clearRect(0, 0, canvas.width, canvas.height)\n\n  if (!canvas.style) canvas.style = {}\n  canvas.height = size\n  canvas.width = size\n  canvas.style.height = size + 'px'\n  canvas.style.width = size + 'px'\n}\n\nfunction getCanvasElement () {\n  try {\n    return document.createElement('canvas')\n  } catch (e) {\n    throw new Error('You need to specify a canvas element')\n  }\n}\n\nexports.render = function render (qrData, canvas, options) {\n  let opts = options\n  let canvasEl = canvas\n\n  if (typeof opts === 'undefined' && (!canvas || !canvas.getContext)) {\n    opts = canvas\n    canvas = undefined\n  }\n\n  if (!canvas) {\n    canvasEl = getCanvasElement()\n  }\n\n  opts = Utils.getOptions(opts)\n  const size = Utils.getImageWidth(qrData.modules.size, opts)\n\n  const ctx = canvasEl.getContext('2d')\n  const image = ctx.createImageData(size, size)\n  Utils.qrToImageData(image.data, qrData, opts)\n\n  clearCanvas(ctx, canvasEl, size)\n  ctx.putImageData(image, 0, 0)\n\n  return canvasEl\n}\n\nexports.renderToDataURL = function renderToDataURL (qrData, canvas, options) {\n  let opts = options\n\n  if (typeof opts === 'undefined' && (!canvas || !canvas.getContext)) {\n    opts = canvas\n    canvas = undefined\n  }\n\n  if (!opts) opts = {}\n\n  const canvasEl = exports.render(qrData, canvas, opts)\n\n  const type = opts.type || 'image/png'\n  const rendererOpts = opts.rendererOpts || {}\n\n  return canvasEl.toDataURL(type, rendererOpts.quality)\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/renderer/canvas.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/renderer/svg-tag.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/qrcode/lib/renderer/svg-tag.js ***!
+  \*****************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+eval("const Utils = __webpack_require__(/*! ./utils */ \"./node_modules/qrcode/lib/renderer/utils.js\")\n\nfunction getColorAttrib (color, attrib) {\n  const alpha = color.a / 255\n  const str = attrib + '=\"' + color.hex + '\"'\n\n  return alpha < 1\n    ? str + ' ' + attrib + '-opacity=\"' + alpha.toFixed(2).slice(1) + '\"'\n    : str\n}\n\nfunction svgCmd (cmd, x, y) {\n  let str = cmd + x\n  if (typeof y !== 'undefined') str += ' ' + y\n\n  return str\n}\n\nfunction qrToPath (data, size, margin) {\n  let path = ''\n  let moveBy = 0\n  let newRow = false\n  let lineLength = 0\n\n  for (let i = 0; i < data.length; i++) {\n    const col = Math.floor(i % size)\n    const row = Math.floor(i / size)\n\n    if (!col && !newRow) newRow = true\n\n    if (data[i]) {\n      lineLength++\n\n      if (!(i > 0 && col > 0 && data[i - 1])) {\n        path += newRow\n          ? svgCmd('M', col + margin, 0.5 + row + margin)\n          : svgCmd('m', moveBy, 0)\n\n        moveBy = 0\n        newRow = false\n      }\n\n      if (!(col + 1 < size && data[i + 1])) {\n        path += svgCmd('h', lineLength)\n        lineLength = 0\n      }\n    } else {\n      moveBy++\n    }\n  }\n\n  return path\n}\n\nexports.render = function render (qrData, options, cb) {\n  const opts = Utils.getOptions(options)\n  const size = qrData.modules.size\n  const data = qrData.modules.data\n  const qrcodesize = size + opts.margin * 2\n\n  const bg = !opts.color.light.a\n    ? ''\n    : '<path ' + getColorAttrib(opts.color.light, 'fill') +\n      ' d=\"M0 0h' + qrcodesize + 'v' + qrcodesize + 'H0z\"/>'\n\n  const path =\n    '<path ' + getColorAttrib(opts.color.dark, 'stroke') +\n    ' d=\"' + qrToPath(data, size, opts.margin) + '\"/>'\n\n  const viewBox = 'viewBox=\"' + '0 0 ' + qrcodesize + ' ' + qrcodesize + '\"'\n\n  const width = !opts.width ? '' : 'width=\"' + opts.width + '\" height=\"' + opts.width + '\" '\n\n  const svgTag = '<svg xmlns=\"http://www.w3.org/2000/svg\" ' + width + viewBox + ' shape-rendering=\"crispEdges\">' + bg + path + '</svg>\\n'\n\n  if (typeof cb === 'function') {\n    cb(null, svgTag)\n  }\n\n  return svgTag\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/renderer/svg-tag.js?");
+
+/***/ }),
+
+/***/ "./node_modules/qrcode/lib/renderer/utils.js":
+/*!***************************************************!*\
+  !*** ./node_modules/qrcode/lib/renderer/utils.js ***!
+  \***************************************************/
+/***/ ((__unused_webpack_module, exports) => {
+
+eval("function hex2rgba (hex) {\n  if (typeof hex === 'number') {\n    hex = hex.toString()\n  }\n\n  if (typeof hex !== 'string') {\n    throw new Error('Color should be defined as hex string')\n  }\n\n  let hexCode = hex.slice().replace('#', '').split('')\n  if (hexCode.length < 3 || hexCode.length === 5 || hexCode.length > 8) {\n    throw new Error('Invalid hex color: ' + hex)\n  }\n\n  // Convert from short to long form (fff -> ffffff)\n  if (hexCode.length === 3 || hexCode.length === 4) {\n    hexCode = Array.prototype.concat.apply([], hexCode.map(function (c) {\n      return [c, c]\n    }))\n  }\n\n  // Add default alpha value\n  if (hexCode.length === 6) hexCode.push('F', 'F')\n\n  const hexValue = parseInt(hexCode.join(''), 16)\n\n  return {\n    r: (hexValue >> 24) & 255,\n    g: (hexValue >> 16) & 255,\n    b: (hexValue >> 8) & 255,\n    a: hexValue & 255,\n    hex: '#' + hexCode.slice(0, 6).join('')\n  }\n}\n\nexports.getOptions = function getOptions (options) {\n  if (!options) options = {}\n  if (!options.color) options.color = {}\n\n  const margin = typeof options.margin === 'undefined' ||\n    options.margin === null ||\n    options.margin < 0\n    ? 4\n    : options.margin\n\n  const width = options.width && options.width >= 21 ? options.width : undefined\n  const scale = options.scale || 4\n\n  return {\n    width: width,\n    scale: width ? 4 : scale,\n    margin: margin,\n    color: {\n      dark: hex2rgba(options.color.dark || '#000000ff'),\n      light: hex2rgba(options.color.light || '#ffffffff')\n    },\n    type: options.type,\n    rendererOpts: options.rendererOpts || {}\n  }\n}\n\nexports.getScale = function getScale (qrSize, opts) {\n  return opts.width && opts.width >= qrSize + opts.margin * 2\n    ? opts.width / (qrSize + opts.margin * 2)\n    : opts.scale\n}\n\nexports.getImageWidth = function getImageWidth (qrSize, opts) {\n  const scale = exports.getScale(qrSize, opts)\n  return Math.floor((qrSize + opts.margin * 2) * scale)\n}\n\nexports.qrToImageData = function qrToImageData (imgData, qr, opts) {\n  const size = qr.modules.size\n  const data = qr.modules.data\n  const scale = exports.getScale(size, opts)\n  const symbolSize = Math.floor((size + opts.margin * 2) * scale)\n  const scaledMargin = opts.margin * scale\n  const palette = [opts.color.light, opts.color.dark]\n\n  for (let i = 0; i < symbolSize; i++) {\n    for (let j = 0; j < symbolSize; j++) {\n      let posDst = (i * symbolSize + j) * 4\n      let pxColor = opts.color.light\n\n      if (i >= scaledMargin && j >= scaledMargin &&\n        i < symbolSize - scaledMargin && j < symbolSize - scaledMargin) {\n        const iSrc = Math.floor((i - scaledMargin) / scale)\n        const jSrc = Math.floor((j - scaledMargin) / scale)\n        pxColor = palette[data[iSrc * size + jSrc] ? 1 : 0]\n      }\n\n      imgData[posDst++] = pxColor.r\n      imgData[posDst++] = pxColor.g\n      imgData[posDst++] = pxColor.b\n      imgData[posDst] = pxColor.a\n    }\n  }\n}\n\n\n//# sourceURL=webpack://gimme-sats/./node_modules/qrcode/lib/renderer/utils.js?");
+
+/***/ }),
+
+/***/ "./src/scss/index.scss":
+/*!*****************************!*\
+  !*** ./src/scss/index.scss ***!
+  \*****************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _node_modules_style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js */ \"./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0__);\n/* harmony import */ var _node_modules_style_loader_dist_runtime_styleDomAPI_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/styleDomAPI.js */ \"./node_modules/style-loader/dist/runtime/styleDomAPI.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_styleDomAPI_js__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_styleDomAPI_js__WEBPACK_IMPORTED_MODULE_1__);\n/* harmony import */ var _node_modules_style_loader_dist_runtime_insertBySelector_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/insertBySelector.js */ \"./node_modules/style-loader/dist/runtime/insertBySelector.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_insertBySelector_js__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_insertBySelector_js__WEBPACK_IMPORTED_MODULE_2__);\n/* harmony import */ var _node_modules_style_loader_dist_runtime_setAttributesWithoutAttributes_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/setAttributesWithoutAttributes.js */ \"./node_modules/style-loader/dist/runtime/setAttributesWithoutAttributes.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_setAttributesWithoutAttributes_js__WEBPACK_IMPORTED_MODULE_3___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_setAttributesWithoutAttributes_js__WEBPACK_IMPORTED_MODULE_3__);\n/* harmony import */ var _node_modules_style_loader_dist_runtime_insertStyleElement_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/insertStyleElement.js */ \"./node_modules/style-loader/dist/runtime/insertStyleElement.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_insertStyleElement_js__WEBPACK_IMPORTED_MODULE_4___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_insertStyleElement_js__WEBPACK_IMPORTED_MODULE_4__);\n/* harmony import */ var _node_modules_style_loader_dist_runtime_styleTagTransform_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! !../../node_modules/style-loader/dist/runtime/styleTagTransform.js */ \"./node_modules/style-loader/dist/runtime/styleTagTransform.js\");\n/* harmony import */ var _node_modules_style_loader_dist_runtime_styleTagTransform_js__WEBPACK_IMPORTED_MODULE_5___default = /*#__PURE__*/__webpack_require__.n(_node_modules_style_loader_dist_runtime_styleTagTransform_js__WEBPACK_IMPORTED_MODULE_5__);\n/* harmony import */ var _node_modules_css_loader_dist_cjs_js_node_modules_sass_loader_dist_cjs_js_index_scss__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! !!../../node_modules/css-loader/dist/cjs.js!../../node_modules/sass-loader/dist/cjs.js!./index.scss */ \"./node_modules/css-loader/dist/cjs.js!./node_modules/sass-loader/dist/cjs.js!./src/scss/index.scss\");\n\n      \n      \n      \n      \n      \n      \n      \n      \n      \n\nvar options = {};\n\noptions.styleTagTransform = (_node_modules_style_loader_dist_runtime_styleTagTransform_js__WEBPACK_IMPORTED_MODULE_5___default());\noptions.setAttributes = (_node_modules_style_loader_dist_runtime_setAttributesWithoutAttributes_js__WEBPACK_IMPORTED_MODULE_3___default());\n\n      options.insert = _node_modules_style_loader_dist_runtime_insertBySelector_js__WEBPACK_IMPORTED_MODULE_2___default().bind(null, \"head\");\n    \noptions.domAPI = (_node_modules_style_loader_dist_runtime_styleDomAPI_js__WEBPACK_IMPORTED_MODULE_1___default());\noptions.insertStyleElement = (_node_modules_style_loader_dist_runtime_insertStyleElement_js__WEBPACK_IMPORTED_MODULE_4___default());\n\nvar update = _node_modules_style_loader_dist_runtime_injectStylesIntoStyleTag_js__WEBPACK_IMPORTED_MODULE_0___default()(_node_modules_css_loader_dist_cjs_js_node_modules_sass_loader_dist_cjs_js_index_scss__WEBPACK_IMPORTED_MODULE_6__[\"default\"], options);\n\n\n\n\n       /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_node_modules_css_loader_dist_cjs_js_node_modules_sass_loader_dist_cjs_js_index_scss__WEBPACK_IMPORTED_MODULE_6__[\"default\"] && _node_modules_css_loader_dist_cjs_js_node_modules_sass_loader_dist_cjs_js_index_scss__WEBPACK_IMPORTED_MODULE_6__[\"default\"].locals ? _node_modules_css_loader_dist_cjs_js_node_modules_sass_loader_dist_cjs_js_index_scss__WEBPACK_IMPORTED_MODULE_6__[\"default\"].locals : undefined);\n\n\n//# sourceURL=webpack://gimme-sats/./src/scss/index.scss?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js":
+/*!****************************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js ***!
+  \****************************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nvar stylesInDOM = [];\n\nfunction getIndexByIdentifier(identifier) {\n  var result = -1;\n\n  for (var i = 0; i < stylesInDOM.length; i++) {\n    if (stylesInDOM[i].identifier === identifier) {\n      result = i;\n      break;\n    }\n  }\n\n  return result;\n}\n\nfunction modulesToDom(list, options) {\n  var idCountMap = {};\n  var identifiers = [];\n\n  for (var i = 0; i < list.length; i++) {\n    var item = list[i];\n    var id = options.base ? item[0] + options.base : item[0];\n    var count = idCountMap[id] || 0;\n    var identifier = \"\".concat(id, \" \").concat(count);\n    idCountMap[id] = count + 1;\n    var indexByIdentifier = getIndexByIdentifier(identifier);\n    var obj = {\n      css: item[1],\n      media: item[2],\n      sourceMap: item[3],\n      supports: item[4],\n      layer: item[5]\n    };\n\n    if (indexByIdentifier !== -1) {\n      stylesInDOM[indexByIdentifier].references++;\n      stylesInDOM[indexByIdentifier].updater(obj);\n    } else {\n      var updater = addElementStyle(obj, options);\n      options.byIndex = i;\n      stylesInDOM.splice(i, 0, {\n        identifier: identifier,\n        updater: updater,\n        references: 1\n      });\n    }\n\n    identifiers.push(identifier);\n  }\n\n  return identifiers;\n}\n\nfunction addElementStyle(obj, options) {\n  var api = options.domAPI(options);\n  api.update(obj);\n\n  var updater = function updater(newObj) {\n    if (newObj) {\n      if (newObj.css === obj.css && newObj.media === obj.media && newObj.sourceMap === obj.sourceMap && newObj.supports === obj.supports && newObj.layer === obj.layer) {\n        return;\n      }\n\n      api.update(obj = newObj);\n    } else {\n      api.remove();\n    }\n  };\n\n  return updater;\n}\n\nmodule.exports = function (list, options) {\n  options = options || {};\n  list = list || [];\n  var lastIdentifiers = modulesToDom(list, options);\n  return function update(newList) {\n    newList = newList || [];\n\n    for (var i = 0; i < lastIdentifiers.length; i++) {\n      var identifier = lastIdentifiers[i];\n      var index = getIndexByIdentifier(identifier);\n      stylesInDOM[index].references--;\n    }\n\n    var newLastIdentifiers = modulesToDom(newList, options);\n\n    for (var _i = 0; _i < lastIdentifiers.length; _i++) {\n      var _identifier = lastIdentifiers[_i];\n\n      var _index = getIndexByIdentifier(_identifier);\n\n      if (stylesInDOM[_index].references === 0) {\n        stylesInDOM[_index].updater();\n\n        stylesInDOM.splice(_index, 1);\n      }\n    }\n\n    lastIdentifiers = newLastIdentifiers;\n  };\n};\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/injectStylesIntoStyleTag.js?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/insertBySelector.js":
+/*!********************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/insertBySelector.js ***!
+  \********************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\nvar memo = {};\n/* istanbul ignore next  */\n\nfunction getTarget(target) {\n  if (typeof memo[target] === \"undefined\") {\n    var styleTarget = document.querySelector(target); // Special case to return head of iframe instead of iframe itself\n\n    if (window.HTMLIFrameElement && styleTarget instanceof window.HTMLIFrameElement) {\n      try {\n        // This will throw an exception if access to iframe is blocked\n        // due to cross-origin restrictions\n        styleTarget = styleTarget.contentDocument.head;\n      } catch (e) {\n        // istanbul ignore next\n        styleTarget = null;\n      }\n    }\n\n    memo[target] = styleTarget;\n  }\n\n  return memo[target];\n}\n/* istanbul ignore next  */\n\n\nfunction insertBySelector(insert, style) {\n  var target = getTarget(insert);\n\n  if (!target) {\n    throw new Error(\"Couldn't find a style target. This probably means that the value for the 'insert' parameter is invalid.\");\n  }\n\n  target.appendChild(style);\n}\n\nmodule.exports = insertBySelector;\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/insertBySelector.js?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/insertStyleElement.js":
+/*!**********************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/insertStyleElement.js ***!
+  \**********************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/* istanbul ignore next  */\nfunction insertStyleElement(options) {\n  var element = document.createElement(\"style\");\n  options.setAttributes(element, options.attributes);\n  options.insert(element, options.options);\n  return element;\n}\n\nmodule.exports = insertStyleElement;\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/insertStyleElement.js?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/setAttributesWithoutAttributes.js":
+/*!**********************************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/setAttributesWithoutAttributes.js ***!
+  \**********************************************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+eval("\n\n/* istanbul ignore next  */\nfunction setAttributesWithoutAttributes(styleElement) {\n  var nonce =  true ? __webpack_require__.nc : 0;\n\n  if (nonce) {\n    styleElement.setAttribute(\"nonce\", nonce);\n  }\n}\n\nmodule.exports = setAttributesWithoutAttributes;\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/setAttributesWithoutAttributes.js?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/styleDomAPI.js":
+/*!***************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/styleDomAPI.js ***!
+  \***************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/* istanbul ignore next  */\nfunction apply(styleElement, options, obj) {\n  var css = \"\";\n\n  if (obj.supports) {\n    css += \"@supports (\".concat(obj.supports, \") {\");\n  }\n\n  if (obj.media) {\n    css += \"@media \".concat(obj.media, \" {\");\n  }\n\n  var needLayer = typeof obj.layer !== \"undefined\";\n\n  if (needLayer) {\n    css += \"@layer\".concat(obj.layer.length > 0 ? \" \".concat(obj.layer) : \"\", \" {\");\n  }\n\n  css += obj.css;\n\n  if (needLayer) {\n    css += \"}\";\n  }\n\n  if (obj.media) {\n    css += \"}\";\n  }\n\n  if (obj.supports) {\n    css += \"}\";\n  }\n\n  var sourceMap = obj.sourceMap;\n\n  if (sourceMap && typeof btoa !== \"undefined\") {\n    css += \"\\n/*# sourceMappingURL=data:application/json;base64,\".concat(btoa(unescape(encodeURIComponent(JSON.stringify(sourceMap)))), \" */\");\n  } // For old IE\n\n  /* istanbul ignore if  */\n\n\n  options.styleTagTransform(css, styleElement, options.options);\n}\n\nfunction removeStyleElement(styleElement) {\n  // istanbul ignore if\n  if (styleElement.parentNode === null) {\n    return false;\n  }\n\n  styleElement.parentNode.removeChild(styleElement);\n}\n/* istanbul ignore next  */\n\n\nfunction domAPI(options) {\n  var styleElement = options.insertStyleElement(options);\n  return {\n    update: function update(obj) {\n      apply(styleElement, options, obj);\n    },\n    remove: function remove() {\n      removeStyleElement(styleElement);\n    }\n  };\n}\n\nmodule.exports = domAPI;\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/styleDomAPI.js?");
+
+/***/ }),
+
+/***/ "./node_modules/style-loader/dist/runtime/styleTagTransform.js":
+/*!*********************************************************************!*\
+  !*** ./node_modules/style-loader/dist/runtime/styleTagTransform.js ***!
+  \*********************************************************************/
+/***/ ((module) => {
+
+"use strict";
+eval("\n\n/* istanbul ignore next  */\nfunction styleTagTransform(css, styleElement) {\n  if (styleElement.styleSheet) {\n    styleElement.styleSheet.cssText = css;\n  } else {\n    while (styleElement.firstChild) {\n      styleElement.removeChild(styleElement.firstChild);\n    }\n\n    styleElement.appendChild(document.createTextNode(css));\n  }\n}\n\nmodule.exports = styleTagTransform;\n\n//# sourceURL=webpack://gimme-sats/./node_modules/style-loader/dist/runtime/styleTagTransform.js?");
+
+/***/ }),
+
+/***/ "./src/index.js":
+/*!**********************!*\
+  !*** ./src/index.js ***!
+  \**********************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _js_bootstrap__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./js/bootstrap */ \"./src/js/bootstrap.js\");\n/* harmony import */ var _scss_index_scss__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./scss/index.scss */ \"./src/scss/index.scss\");\n\n\n\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_js_bootstrap__WEBPACK_IMPORTED_MODULE_0__[\"default\"]);\n\n\n//# sourceURL=webpack://gimme-sats/./src/index.js?");
+
+/***/ }),
+
+/***/ "./src/js/api/Mock.js":
+/*!****************************!*\
+  !*** ./src/js/api/Mock.js ***!
+  \****************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _base__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./base */ \"./src/js/api/base.js\");\n\n\nclass Mock extends _base__WEBPACK_IMPORTED_MODULE_0__[\"default\"] {\n  _basePath = () => \"mock.net\";\n\n  _mockInvoice = (overrides = {}) => ({\n    lnInvoice: \"ln-invoice\",\n    secondsLeft: 56,\n    btcInvoice: \"btc-invoice\",\n    invoiceId: \"invoice-id\",\n    ...overrides,\n  });\n\n  getInvoice = (expired = false) => {\n    return new Promise((resolve) => {\n      setTimeout(\n        () => resolve(this._mockInvoice({ secondsLeft: expired ? 0 : 45 })),\n        800\n      );\n    });\n  };\n\n  checkInvoice = (paid = true) => {\n    return new Promise((resolve) => {\n      setTimeout(\n        () => resolve(this._mockInvoice({ stage: paid ? \"PAID\" : \"INVOICE\" })),\n        800\n      );\n    });\n  };\n}\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Mock);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/api/Mock.js?");
+
+/***/ }),
+
+/***/ "./src/js/api/Strike.js":
+/*!******************************!*\
+  !*** ./src/js/api/Strike.js ***!
+  \******************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (/* binding */ Strike)\n/* harmony export */ });\n/* harmony import */ var axios__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! axios */ \"./node_modules/axios/index.js\");\n/* harmony import */ var axios__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(axios__WEBPACK_IMPORTED_MODULE_0__);\n/* harmony import */ var _base__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./base */ \"./src/js/api/base.js\");\n\n\n\nclass Strike extends _base__WEBPACK_IMPORTED_MODULE_1__[\"default\"] {\n  _basePath = () => \"https://api.zaphq.io/api/v0.4/public\";\n\n  getInvoice = async ({ to, note, amount }) => {\n    const includeOnchainAddress = amount >= 10;\n    const body = {\n      description: note,\n      includeOnchainAddress,\n      amount: {\n        currency: \"USD\",\n        amount: amount.toFixed(2),\n      },\n    };\n\n    const { data } = await axios__WEBPACK_IMPORTED_MODULE_0___default().post(this._path(`users/${to}/pay`), body);\n\n    return Promise.resolve({\n      lnInvoice: data.lnInvoice,\n      secondsLeft: data.expirySecond - _base__WEBPACK_IMPORTED_MODULE_1__[\"default\"].secondsToExpireEarly,\n      btcInvoice: data.onchainAddress,\n      invoiceId: data.quoteId,\n    });\n  };\n\n  checkInvoice = async (invoice) => {\n    const { data } = await axios__WEBPACK_IMPORTED_MODULE_0___default().get(\n      this._path(`receive/${invoice.invoiceId}`)\n    );\n    const { result, expirySecond } = data;\n    const secondsLeft = expirySecond - _base__WEBPACK_IMPORTED_MODULE_1__[\"default\"].secondsToExpireEarly;\n    const status =\n      result === \"PAID\" ? \"PAID\" : secondsLeft <= 0 ? \"EXPIRED\" : \"LIVE\";\n\n    return Promise.resolve({\n      ...invoice,\n      secondsLeft,\n      status,\n    });\n  };\n}\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/api/Strike.js?");
+
+/***/ }),
+
+/***/ "./src/js/api/base.js":
+/*!****************************!*\
+  !*** ./src/js/api/base.js ***!
+  \****************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (/* binding */ BaseApi)\n/* harmony export */ });\nclass BaseApi {\n  static secondsToExpireEarly = 2;\n\n  _path = (subpath) => [this._basePath(), subpath].join(\"/\");\n\n  _invoice = () => {\n    return gms.state.invoice;\n  };\n\n  _settings = () => {\n    return gms.settings;\n  };\n\n  _basePath = () => {\n    this._implementError(\"basePath\");\n    return \"\";\n  };\n\n  _implementError = (methodName) => {\n    throw new Error(\n      `GimmeSats -- Not Implemented -- ${methodName} method must be defined in BaseApi subclasses.`\n    );\n  };\n\n  // eslint-disable-next-line\n  getInvoice = (data = {}) => {\n    this._implementError(\"getInvoice\");\n    return Promise.resolve(this._invoice());\n  };\n\n  // eslint-disable-next-line\n  checkForPayment = (data = {}) => {\n    this._implementError(\"checkForPayment\");\n    return Promise.resolve(this._invoice());\n  };\n}\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/api/base.js?");
+
+/***/ }),
+
+/***/ "./src/js/api/index.js":
+/*!*****************************!*\
+  !*** ./src/js/api/index.js ***!
+  \*****************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _Mock__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./Mock */ \"./src/js/api/Mock.js\");\n/* harmony import */ var _Strike__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./Strike */ \"./src/js/api/Strike.js\");\n\n\n\nconst APIs = {\n  STRIKE: _Strike__WEBPACK_IMPORTED_MODULE_1__[\"default\"],\n  MOCK: _Mock__WEBPACK_IMPORTED_MODULE_0__[\"default\"],\n};\n\nconst API = (service = gms.settings.service) => {\n  const ApiClass = APIs[service];\n  if (!ApiClass) {\n    throw new Error(`GimmeSats -- No such API service: ${service}`);\n  }\n\n  return new ApiClass();\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (API);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/api/index.js?");
+
+/***/ }),
+
+/***/ "./src/js/bootstrap.js":
+/*!*****************************!*\
+  !*** ./src/js/bootstrap.js ***!
+  \*****************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _bootstrapper__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./bootstrapper */ \"./src/js/bootstrapper.js\");\n\n\nwindow.onload = () => {\n  _bootstrapper__WEBPACK_IMPORTED_MODULE_0__[\"default\"].bootstrap();\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_bootstrapper__WEBPACK_IMPORTED_MODULE_0__[\"default\"]);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/bootstrap.js?");
+
+/***/ }),
+
+/***/ "./src/js/bootstrapper.js":
+/*!********************************!*\
+  !*** ./src/js/bootstrapper.js ***!
+  \********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _gms__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./gms */ \"./src/js/gms.js\");\n/* harmony import */ var _helpers_utils__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./helpers/utils */ \"./src/js/helpers/utils.js\");\n\n\n\nconst bolt = (width = 12) => `\n  <svg\n    focusable=\"false\"\n    class=\"gms__icon\"\n    role=\"img\"\n    xmlns=\"http://www.w3.org/2000/svg\"\n    viewBox=\"0 0 320 512\"\n    width=\"${width}\"\n  >\n    <path fill=\"#fed954\"\n      d=\"M296 160H180.6l42.6-129.8C227.2 15 215.7 0 200 0H56C44 0 33.8 8.9 32.2 20.8l-32 240C-1.7 275.2 9.5 288 24 288h118.7L96.6 482.5c-3.6 15.2 8 29.5 23.3 29.5 8.4 0 16.4-4.4 20.8-12l176-304c9.3-15.9-2.2-36-20.7-36z\"\n    >\n    </path>\n  </svg>\n`;\n\n_gms__WEBPACK_IMPORTED_MODULE_0__[\"default\"].bootstrap = () => {\n  const root = document.getElementById(\"gms-root\");\n\n  if (!root) {\n    throw new Error(\"GimmeSats -- No element found with ID 'gms-root'.\");\n  }\n\n  const globalSettings = (0,_helpers_utils__WEBPACK_IMPORTED_MODULE_1__.parseSettings)(root);\n  const darkThemes = [\"dark-blue\"];\n  const lightThemes = [\"white\"];\n  const themes = [...darkThemes, ...lightThemes];\n  const classes = [];\n\n  root.classList.forEach((klass) => {\n    classes.push(klass);\n  });\n\n  const theme = classes.filter(\n    (klass) =>\n      klass.includes(\"gms-theme--\") && themes.includes(klass.split(\"--\")[1])\n  )[0];\n\n  if (!theme) {\n    throw new Error(\"GimmeSats -- Root element requires a valid theme.\");\n  }\n\n  root.classList.add(\n    `gms-theme--is-${\n      darkThemes.includes(theme.split(\"--\")[1]) ? \"dark\" : \"light\"\n    }`\n  );\n\n  if (root.children.length > 1) {\n    throw new Error(\n      \"GimmeSats -- Root element cannot have more than one child.\"\n    );\n  }\n\n  const container = document.createElement(\"div\");\n  container.classList.add(\"gms-modal-window\");\n\n  const screen = document.createElement(\"div\");\n  screen.classList.add(\"gms-modal-screen\");\n\n  const card = document.createElement(\"div\");\n  card.classList.add(\"gms-modal-card\");\n\n  screen.prepend(card);\n  container.prepend(screen);\n  root.prepend(container);\n\n  window.gms = new _gms__WEBPACK_IMPORTED_MODULE_0__[\"default\"](root, globalSettings);\n\n  const triggers = document.getElementsByClassName(\"gms-button\");\n\n  for (let i = 0; i < triggers.length; i++) {\n    const trigger = triggers[i];\n    const settings = (0,_helpers_utils__WEBPACK_IMPORTED_MODULE_1__.parseSettings)(trigger);\n\n    trigger.onclick = () => {\n      window.gms.trigger(settings);\n    };\n\n    if (trigger.classList.contains(\"gms-button--bolt\")) {\n      const text = trigger.innerHTML;\n\n      if (text.length) {\n        trigger.innerHTML = `${text}${bolt()}`;\n      } else {\n        trigger.innerHTML = bolt(14);\n        trigger.classList.add(\"gms-button--no-text\");\n      }\n    }\n  }\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (_gms__WEBPACK_IMPORTED_MODULE_0__[\"default\"]);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/bootstrapper.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/AmountInput.js":
+/*!*************************************!*\
+  !*** ./src/js/cards/AmountInput.js ***!
+  \*************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../pieces/modalContent */ \"./src/js/pieces/modalContent.js\");\n\n\nconst AmountInput = () => {\n  const { amountIsFixed, to, displayName } = gms.settings;\n  const amount = gms.state.amount || gms.settings.amount;\n\n  const missing = gms.requiredSettings.filter((key) => !gms.settings[key]);\n  if (missing.length) {\n    throw new Error(\n      `GimmeSats -- Missing required settings: '${missing.join(\"', '\")}'`\n    );\n  }\n\n  if (amountIsFixed && !amount) {\n    throw new Error(\n      \"GimmeSats -- Bad settings: 'amountIsFixed' was set to true with empty amount.\"\n    );\n  }\n\n  const bodyContent = `\n      <h2>${amountIsFixed ? `$${amount.toFixed(2)}` : \"Enter an amount\"}</h2>\n      ${\n        amountIsFixed\n          ? \"\"\n          : `\n        <div class=\"gms-modal-row\" style='margin-left: -20px'>\n          <h2 style=\"margin-right: 10px\">$</h2>\n          <input\n            type=\"number\"\n            class=\"gms-amount-input\"\n            value=${amount.toFixed(2)}\n          />\n        </div>`\n      }\n    `;\n\n  const makeActionObjects = ({ body }) => {\n    const input = body.getElementsByClassName(\"gms-amount-input\")[0];\n    return [\n      {\n        text: \"Next\",\n        disabled: !amount,\n        onClick: () =>\n          gms.updateState({\n            amount: parseFloat(input.value),\n            stage: gms.nextStage(),\n          }),\n      },\n      {\n        text: \"Cancel\",\n        onClick: () => gms.close(),\n      },\n    ];\n  };\n\n  const { content, body, actions } = (0,_pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\n    `<h1>Pay ${displayName || to}</h1>`,\n    bodyContent,\n    makeActionObjects\n  );\n  const input = body.getElementsByClassName(\"gms-amount-input\")[0];\n\n  const handleNumInput = (event) => {\n    const { target } = event;\n    // Format number appropriately\n    const cleaned = parseFloat(target.value).toFixed(2);\n\n    if (cleaned !== target.value) {\n      target.value = cleaned;\n    }\n\n    const primary = actions.children[0];\n    primary.disabled = !(parseFloat(cleaned) > 0);\n  };\n\n  input.oninput = handleNumInput;\n  return content;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (AmountInput);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/AmountInput.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/ErrorCard.js":
+/*!***********************************!*\
+  !*** ./src/js/cards/ErrorCard.js ***!
+  \***********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../pieces/modalContent */ \"./src/js/pieces/modalContent.js\");\n\n\nconst ErrorCard = () => {\n  const { content } = (0,_pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\n    `<h1>Uh oh</h1>`,\n    `<h3>Something went wrong!</h3>\n     <p>See the console for details.</p>`,\n    () => [\n      undefined,\n      {\n        text: \"Cancel\",\n        onClick: () => {\n          gms.close();\n        },\n      },\n    ]\n  );\n\n  return content;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (ErrorCard);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/ErrorCard.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/Invoice.js":
+/*!*********************************!*\
+  !*** ./src/js/cards/Invoice.js ***!
+  \*********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var qrcode__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! qrcode */ \"./node_modules/qrcode/lib/browser.js\");\n/* harmony import */ var _pieces_modalContent__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../pieces/modalContent */ \"./src/js/pieces/modalContent.js\");\n/* harmony import */ var _helpers_invoice__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ../helpers/invoice */ \"./src/js/helpers/invoice.js\");\n\n\n\n\n\n\nconst Invoice = () => {\n  const { stage, displayName, to } = gms.settings;\n  const setAmount = gms.state.amount || gms.settings.amount;\n\n  const amount = gms.state.tipInvoice\n    ? Math.max(0.05 * setAmount, 0.05)\n    : setAmount;\n  const note = gms.state.tipInvoice\n    ? gms.tipNote\n    : gms.state.note || gms.settings.note;\n\n  const invoice = gms.state.tipInvoice || gms.state.invoice;\n\n  const { secondsLeft, lnInvoice } = invoice;\n\n  (0,_helpers_invoice__WEBPACK_IMPORTED_MODULE_2__.pollForInvoice)(invoice);\n\n  console.log(\"HERE\");\n  const expired = stage === \"EXPIRED\";\n\n  // TODO: Toggle to Onchain\n  const invoiceString = lnInvoice;\n\n  const headerContent = `\n    <h1>${gms.state.tipInvoice ? gms.tipDisplayName : displayName || to}</h1>\n    <h2>$${amount.toFixed(2)}</h2>\n    <p>${note}</p>\n  `;\n\n  const bodyContent = `\n    <div\n      class=\"gms-qr\"\n      ${\n        // Uncomment for header-click shortcut to expiry\n        // onClick={() => actions.updateState({ stage: EXPIRED })\n        \"\"\n      }\n    >\n      ${expired ? `<div class=\"gms-qr__expired\"></div>` : `<canvas></canvas>`}\n    </div>\n    <p>${expired ? \"Expired\" : `Expires in ${secondsLeft}`}</p>\n  `;\n\n  const makeActionObjects = () => [\n    {\n      onClick: expired\n        ? () =>\n            (0,_helpers_invoice__WEBPACK_IMPORTED_MODULE_2__.getInvoiceAndPoll)(\n              gms.state.tipInvoice\n                ? {\n                    to: gms.tipTo,\n                    amount: gms.state.amount * 0.05,\n                    note: gms.tipNote,\n                  }\n                : {\n                    to: gms.settings.to,\n                    amount: gms.state.amount,\n                    note: gms.note.amount,\n                  }\n            )\n        : () => navigator.clipboard.writeText(invoiceString),\n      text: expired ? \"Refresh\" : \"Copy\",\n    },\n    {\n      onClick: () => {\n        gms.updateState({ stage: \"NOTE_INPUT\", invoice: undefined });\n      },\n      text: \"Back\",\n    },\n  ];\n\n  console.log(\"YUP\");\n  const { content, body } = (0,_pieces_modalContent__WEBPACK_IMPORTED_MODULE_1__[\"default\"])(\n    headerContent,\n    bodyContent,\n    makeActionObjects\n  );\n\n  const canvas = body.getElementsByTagName(\"canvas\")[0];\n  console.log(\"YiP\");\n  qrcode__WEBPACK_IMPORTED_MODULE_0__.toCanvas(canvas, lnInvoice, { width: 200 }, function (error) {\n    if (error) {\n      console.error(error);\n      throw new Error(`GimmeSats - QR failed to render.`);\n    }\n  });\n  console.log(\"YEP\");\n  // TODO: Remove. Simulates payment on QR click\n  canvas.onclick = () => {\n    gms.updateState({ stage: \"PAID\" });\n  };\n\n  return content;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Invoice);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/Invoice.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/Loader.js":
+/*!********************************!*\
+  !*** ./src/js/cards/Loader.js ***!
+  \********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _pieces_element__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../pieces/element */ \"./src/js/pieces/element.js\");\n\n\nconst Loader = () => {\n  return (0,_pieces_element__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\n    \"gms-modal-content\",\n    `<div class=\"gms-modal__spinner-container\">\n      <div class=\"gms-modal__spinner\"></div>\n     </div>`\n  );\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Loader);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/Loader.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/NoteInput.js":
+/*!***********************************!*\
+  !*** ./src/js/cards/NoteInput.js ***!
+  \***********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _helpers_invoice__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../helpers/invoice */ \"./src/js/helpers/invoice.js\");\n/* harmony import */ var _pieces_modalContent__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../pieces/modalContent */ \"./src/js/pieces/modalContent.js\");\n\n\n\nconst NoteInput = () => {\n  const { to, displayName, amountIsFixed, noteIsFixed, noteRequired } =\n    gms.settings;\n\n  const { amount } = gms.state;\n  const note = gms.state.note || gms.settings.note;\n\n  if (noteRequired && !note?.length) {\n    throw new Error(\n      \"GimmeSats -- Bad settings: 'noteRequired' was set to true with empty note.\"\n    );\n  }\n\n  const bodyContent = `\n    ${\n      noteIsFixed\n        ? `\n          <h2>$${(amount || 0).toFixed(2)}</h2>\n          <p>${note}</p>\n        `\n        : `\n          <div class=\"gms-modal-row\">\n            <h2 style=\"margin-right: 10px\">$</h2>\n            <h1 class=\"gms-large-text\">${(amount || 0).toFixed(2)}</h1>\n          </div>\n          <h2>Add a note</h2>\n          <textarea class=\"gms-note-input\">${note}</textarea>`\n    }\n    `;\n\n  const makeActionObjects = ({ body }) => {\n    const input = body.getElementsByTagName(\"textarea\")[0];\n    return [\n      {\n        onClick: () => {\n          gms.updateState({ stage: \"LOADING\", note: input.value });\n          (0,_helpers_invoice__WEBPACK_IMPORTED_MODULE_0__.getInvoiceAndPoll)({\n            to: gms.settings.to,\n            amount: gms.state.amount,\n            note: input.value,\n          });\n        },\n        disabled: noteRequired && !input.value.length,\n        text: \"Get invoice\",\n      },\n      {\n        onClick: amountIsFixed\n          ? () => gms.close()\n          : () => gms.updateState({ stage: \"AMOUNT_INPUT\" }),\n        text: amountIsFixed ? \"Cancel\" : \"Back\",\n      },\n    ];\n  };\n\n  const { content, body, actions } = (0,_pieces_modalContent__WEBPACK_IMPORTED_MODULE_1__[\"default\"])(\n    `<h1>Pay ${displayName || to}</h1>`,\n    bodyContent,\n    makeActionObjects\n  );\n\n  const input = body.getElementsByTagName(\"textarea\")[0];\n  const handleInput = (event) => {\n    const { target } = event;\n\n    const primary = actions.children[0];\n    primary.disabled = !target.value.length;\n  };\n  input.oninput = handleInput;\n\n  return content;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (NoteInput);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/NoteInput.js?");
+
+/***/ }),
+
+/***/ "./src/js/cards/Paid.js":
+/*!******************************!*\
+  !*** ./src/js/cards/Paid.js ***!
+  \******************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ../pieces/modalContent */ \"./src/js/pieces/modalContent.js\");\n/* harmony import */ var _helpers_invoice__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ../helpers/invoice */ \"./src/js/helpers/invoice.js\");\n\n\n\nconst Paid = () => {\n  const { content } = (0,_pieces_modalContent__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\n    `<h1>${gms.state.tipInvoice ? \"Thank you!\" : \"Invoice paid!\"}</h1>\n     <h3>$${(gms.state.tipAmount || gms.state.amount).toFixed(2)}</h3>`,\n    `<svg\n      class=\"gms-success\"\n      xmlns=\"http://www.w3.org/2000/svg\"\n      viewbox=\"-26 -26 104 104\"\n    >\n      <circle class=\"checkmark__circle\" cx=\"26\" cy=\"26\" r=\"25\" fill=\"none\"></circle>\n      <path\n        class=\"checkmark__check\"\n        fill=\"none\"\n        d=\"M14.1 27.2l7.1 7.2 16.7-16.8\"\n      ></path>\n    </svg>`,\n    () => [\n      gms.settings.suggestTip && !gms.state.tipInvoice\n        ? {\n            text: \"Leave a Tip?\",\n            onClick: () => {\n              const tipAmount = Math.max(gms.state.amount * 0.05, 0.05);\n              gms.updateState({ stage: \"LOADING\", tipInvoice: {}, tipAmount });\n              (0,_helpers_invoice__WEBPACK_IMPORTED_MODULE_1__.getInvoiceAndPoll)({\n                to: gms.tipTo,\n                amount: tipAmount,\n                note: gms.tipNote,\n              });\n            },\n          }\n        : undefined,\n      {\n        text: \"Done\",\n        onClick: () => gms.close(),\n      },\n    ]\n  );\n\n  return content;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (Paid);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/cards/Paid.js?");
+
+/***/ }),
+
+/***/ "./src/js/gms.js":
+/*!***********************!*\
+  !*** ./src/js/gms.js ***!
+  \***********************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _helpers_utils__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./helpers/utils */ \"./src/js/helpers/utils.js\");\n/* harmony import */ var _cards_AmountInput__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./cards/AmountInput */ \"./src/js/cards/AmountInput.js\");\n/* harmony import */ var _cards_NoteInput__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(/*! ./cards/NoteInput */ \"./src/js/cards/NoteInput.js\");\n/* harmony import */ var _cards_Invoice__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(/*! ./cards/Invoice */ \"./src/js/cards/Invoice.js\");\n/* harmony import */ var _api_index__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(/*! ./api/index */ \"./src/js/api/index.js\");\n/* harmony import */ var _cards_ErrorCard__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(/*! ./cards/ErrorCard */ \"./src/js/cards/ErrorCard.js\");\n/* harmony import */ var _cards_Paid__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(/*! ./cards/Paid */ \"./src/js/cards/Paid.js\");\n/* harmony import */ var _cards_Loader__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(/*! ./cards/Loader */ \"./src/js/cards/Loader.js\");\n\n\n\n\n\n\n\n\n\nclass GMS {\n  requiredSettings = [\"to\", \"service\"];\n  expiryInterval;\n\n  tipPercentage = 0.05;\n  tipMin = 0.01; // Cents\n  tipService = \"STRIKE\";\n  tipTo = \"sasha\";\n  tipDisplayName = \"GimmeSats Devs\";\n  tipNote = `${this.tipPercentage}% of charge (or 1 cent min).`;\n\n  constructor(root, globalSettings) {\n    this.root = root;\n    this.card = root.getElementsByClassName(\"gms-modal-card\")[0];\n    this._globalSettings = {\n      ..._helpers_utils__WEBPACK_IMPORTED_MODULE_0__.defaults,\n      ...globalSettings,\n    };\n    this.settings = {};\n    this.state = {};\n  }\n\n  render() {\n    const { stage } = this.state;\n    try {\n      this.root.onclick = undefined;\n\n      if (window.location.href.includes(\"http://localhost:3000\")) {\n        console.log(\"RENDERING\", this.settings, this.state);\n      }\n\n      const show = !!stage;\n\n      if (show) {\n        this.root.classList.add(\"gms--show\");\n      } else {\n        this.root.classList.remove(\"gms--show\");\n      }\n\n      if (!show) {\n        return;\n      }\n    } catch (err) {\n      if (window.location.href.includes(\"http://localhost:3000\")) {\n        console.error(err);\n      }\n      return;\n    }\n\n    try {\n      const Card = {\n        AMOUNT_INPUT: _cards_AmountInput__WEBPACK_IMPORTED_MODULE_1__[\"default\"],\n        NOTE_INPUT: _cards_NoteInput__WEBPACK_IMPORTED_MODULE_2__[\"default\"],\n        INVOICE: _cards_Invoice__WEBPACK_IMPORTED_MODULE_3__[\"default\"],\n        EXPIRED: _cards_Invoice__WEBPACK_IMPORTED_MODULE_3__[\"default\"],\n        TIP_INVOICE: _cards_Invoice__WEBPACK_IMPORTED_MODULE_3__[\"default\"],\n        PAID: _cards_Paid__WEBPACK_IMPORTED_MODULE_6__[\"default\"],\n        LOADING: _cards_Loader__WEBPACK_IMPORTED_MODULE_7__[\"default\"],\n      }[stage];\n\n      if (!Card) {\n        throw new Error(\n          `GimmeSats -- No content function found for stage: ${stage}.`\n        );\n      }\n\n      this._setCard(Card);\n    } catch (err) {\n      if (window.location.href.includes(\"http://localhost:3000\")) {\n        console.error(err);\n      }\n      this._setCard(_cards_ErrorCard__WEBPACK_IMPORTED_MODULE_5__[\"default\"]);\n    }\n  }\n\n  api(service) {\n    return (0,_api_index__WEBPACK_IMPORTED_MODULE_4__[\"default\"])(service);\n  }\n\n  updateState(newState, overwrite = false) {\n    this.state = overwrite ? newState : { ...this.state, ...newState };\n\n    this.render();\n  }\n\n  close() {\n    this.settings = {};\n    this.state = {};\n    this.render();\n  }\n\n  nextStage() {\n    const next = _helpers_utils__WEBPACK_IMPORTED_MODULE_0__.stages[_helpers_utils__WEBPACK_IMPORTED_MODULE_0__.stages.indexOf(this.state.stage) + 1];\n    return next;\n  }\n\n  prevStage() {\n    const prev = _helpers_utils__WEBPACK_IMPORTED_MODULE_0__.stages[_helpers_utils__WEBPACK_IMPORTED_MODULE_0__.stages.indexOf(this.state.stage) - 1];\n    return prev;\n  }\n\n  trigger = (triggerSettings = {}) => {\n    const settings = {\n      ...this._globalSettings,\n      ...triggerSettings,\n    };\n\n    const state = { stage: \"AMOUNT_INPUT\" };\n\n    if (settings.amountFixed) {\n      state.amount = settings.amount;\n    }\n\n    if (settings.noteFixed) {\n      state.note = settings.note;\n    }\n\n    this.settings = settings;\n    this.state = state;\n    this.render();\n  };\n\n  receiveInvoice(invoice) {\n    this.state.invoice = invoice;\n    this.expiryInterval = setInterval(() => {\n      const api = new _api_index__WEBPACK_IMPORTED_MODULE_4__[\"default\"]();\n      api.checkForPaymentAndUpdateApp();\n      this.state.invoice.expirySeconds -= 1;\n      if (this.state.invoice.expirySeconds <= 0) {\n        clearInterval(this.expiryInterval);\n      }\n      this.render();\n    }, 1000);\n  }\n\n  _setCard(card) {\n    this.card.innerHTML = \"\";\n    this.card.prepend(card());\n    this._closeModalOnClick();\n  }\n\n  _closeModalOnClick() {\n    setTimeout(() => {\n      this.root.onclick = (event) => {\n        if (!(0,_helpers_utils__WEBPACK_IMPORTED_MODULE_0__.isDescendant)(event.target, \"gms-modal-card\")) {\n          this.close();\n        }\n      };\n    }, 100);\n  }\n}\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (GMS);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/gms.js?");
+
+/***/ }),
+
+/***/ "./src/js/helpers/invoice.js":
+/*!***********************************!*\
+  !*** ./src/js/helpers/invoice.js ***!
+  \***********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"pollForInvoice\": () => (/* binding */ pollForInvoice),\n/* harmony export */   \"getInvoiceAndPoll\": () => (/* binding */ getInvoiceAndPoll)\n/* harmony export */ });\n// If there's a tip invoice, regular invoice has been paid.\nconst _isTip = () => !!gms.state.tipInvoice;\n\nconst _api = () => gms.api(_isTip() ? gms.tipService : undefined);\n\nconst _invoiceKey = () => (_isTip() ? \"tipInvoice\" : \"invoice\");\n\nconst pollForInvoice = (invoice) => {\n  if (!invoice) {\n    return;\n  }\n\n  _api()\n    .checkInvoice(invoice)\n    .then((invoice) => {\n      if ([\"EXPIRED\", \"PAID\"].includes(invoice.status)) {\n        gms.updateState({\n          stage: invoice.status,\n          [_invoiceKey()]: invoice,\n        });\n      } else {\n        gms.updateState({\n          [_invoiceKey()]: invoice,\n        });\n        setTimeout(() => {\n          pollForInvoice(invoice);\n        }, 1000);\n      }\n    });\n};\n\nconst getInvoiceAndPoll = (data) => {\n  _api()\n    .getInvoice(data)\n    .then((invoice) => {\n      gms.updateState({\n        stage: _isTip() ? \"TIP_INVOICE\" : \"INVOICE\",\n        [_invoiceKey()]: invoice,\n      });\n      pollForInvoice(invoice);\n    });\n};\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/helpers/invoice.js?");
+
+/***/ }),
+
+/***/ "./src/js/helpers/utils.js":
+/*!*********************************!*\
+  !*** ./src/js/helpers/utils.js ***!
+  \*********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"defaults\": () => (/* binding */ defaults),\n/* harmony export */   \"parseSettings\": () => (/* binding */ parseSettings),\n/* harmony export */   \"stages\": () => (/* binding */ stages),\n/* harmony export */   \"isDescendant\": () => (/* binding */ isDescendant)\n/* harmony export */ });\nconst defaults = {\n  service: \"STRIKE\",\n  amount: 0,\n  note: \"\",\n  suggestTip: true,\n};\n\nconst parseSettings = (element) => {\n  const settingsString = element.getAttribute(\"data-settings\") || \"{}\";\n\n  let settings;\n  try {\n    settings = JSON.parse(settingsString);\n  } catch (err) {\n    throw new Error(\n      `GimmeSats -- Failed to parse element settings. Make sure they are in JSON format.\n          Element: ${element}\n          Error: ${err}`\n    );\n  }\n\n  return settings || {};\n};\n\nconst stages = [\"AMOUNT_INPUT\", \"NOTE_INPUT\", \"INVOICE\", \"PAID\"];\n\nconst isDescendant = (child, parentClass) => {\n  let node = child.parentNode;\n  while (node != null) {\n    if (node.classList && node.classList.contains(parentClass)) {\n      return true;\n    }\n    node = node.parentNode;\n  }\n  return false;\n};\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/helpers/utils.js?");
+
+/***/ }),
+
+/***/ "./src/js/pieces/actionGroup.js":
+/*!**************************************!*\
+  !*** ./src/js/pieces/actionGroup.js ***!
+  \**************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _button__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./button */ \"./src/js/pieces/button.js\");\n\n\nconst actionGroup = (primary, secondary) => {\n  const group = document.createElement(\"div\");\n  group.classList.add(\"gms-modal-actions\");\n\n  if (primary) {\n    group.append((0,_button__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(primary, \"med\"));\n  }\n\n  if (secondary) {\n    group.append((0,_button__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(secondary, \"light\"));\n  }\n\n  return group;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (actionGroup);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/pieces/actionGroup.js?");
+
+/***/ }),
+
+/***/ "./src/js/pieces/button.js":
+/*!*********************************!*\
+  !*** ./src/js/pieces/button.js ***!
+  \*********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\nconst button = (obj, tone) => {\n  const b = document.createElement(\"button\");\n  b.classList.add(\"gms-button\");\n  b.classList.add(`gms-button--${tone || obj.tone}`);\n  b.disabled = obj.disabled;\n  b.innerHTML = obj.text;\n  b.onclick = obj.onClick;\n  return b;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (button);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/pieces/button.js?");
+
+/***/ }),
+
+/***/ "./src/js/pieces/element.js":
+/*!**********************************!*\
+  !*** ./src/js/pieces/element.js ***!
+  \**********************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\nconst element = (klass, innerHTML = \"\", type = \"div\") => {\n  const el = document.createElement(type);\n  el.classList.add(klass);\n  el.innerHTML = innerHTML;\n  return el;\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (element);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/pieces/element.js?");
+
+/***/ }),
+
+/***/ "./src/js/pieces/modalContent.js":
+/*!***************************************!*\
+  !*** ./src/js/pieces/modalContent.js ***!
+  \***************************************/
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+"use strict";
+eval("__webpack_require__.r(__webpack_exports__);\n/* harmony export */ __webpack_require__.d(__webpack_exports__, {\n/* harmony export */   \"default\": () => (__WEBPACK_DEFAULT_EXPORT__)\n/* harmony export */ });\n/* harmony import */ var _element__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! ./element */ \"./src/js/pieces/element.js\");\n/* harmony import */ var _actionGroup__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(/*! ./actionGroup */ \"./src/js/pieces/actionGroup.js\");\n\n\n\nconst modalContent = (headerContent, bodyContent, makeActionObjects) => {\n  const content = (0,_element__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\"gms-modal-content\");\n  const header = (0,_element__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\"gms-modal-header\", headerContent);\n  const body = (0,_element__WEBPACK_IMPORTED_MODULE_0__[\"default\"])(\"gms-modal-body\", bodyContent);\n  const actions = (0,_actionGroup__WEBPACK_IMPORTED_MODULE_1__[\"default\"])(...makeActionObjects({ header, body }));\n\n  content.appendChild(header);\n  content.appendChild(body);\n  content.appendChild(actions);\n\n  return { content, header, body, actions };\n};\n\n/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (modalContent);\n\n\n//# sourceURL=webpack://gimme-sats/./src/js/pieces/modalContent.js?");
+
+/***/ })
+
+/******/ 	});
+/************************************************************************/
+/******/ 	// The module cache
+/******/ 	var __webpack_module_cache__ = {};
+/******/ 	
+/******/ 	// The require function
+/******/ 	function __webpack_require__(moduleId) {
+/******/ 		// Check if module is in cache
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 			id: moduleId,
+/******/ 			// no module.loaded needed
+/******/ 			exports: {}
+/******/ 		};
+/******/ 	
+/******/ 		// Execute the module function
+/******/ 		__webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+/******/ 	
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/ 	
+/************************************************************************/
+/******/ 	/* webpack/runtime/compat get default export */
+/******/ 	(() => {
+/******/ 		// getDefaultExport function for compatibility with non-harmony modules
+/******/ 		__webpack_require__.n = (module) => {
+/******/ 			var getter = module && module.__esModule ?
+/******/ 				() => (module['default']) :
+/******/ 				() => (module);
+/******/ 			__webpack_require__.d(getter, { a: getter });
+/******/ 			return getter;
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/define property getters */
+/******/ 	(() => {
+/******/ 		// define getter functions for harmony exports
+/******/ 		__webpack_require__.d = (exports, definition) => {
+/******/ 			for(var key in definition) {
+/******/ 				if(__webpack_require__.o(definition, key) && !__webpack_require__.o(exports, key)) {
+/******/ 					Object.defineProperty(exports, key, { enumerable: true, get: definition[key] });
+/******/ 				}
+/******/ 			}
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/hasOwnProperty shorthand */
+/******/ 	(() => {
+/******/ 		__webpack_require__.o = (obj, prop) => (Object.prototype.hasOwnProperty.call(obj, prop))
+/******/ 	})();
+/******/ 	
+/******/ 	/* webpack/runtime/make namespace object */
+/******/ 	(() => {
+/******/ 		// define __esModule on exports
+/******/ 		__webpack_require__.r = (exports) => {
+/******/ 			if(typeof Symbol !== 'undefined' && Symbol.toStringTag) {
+/******/ 				Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
+/******/ 			}
+/******/ 			Object.defineProperty(exports, '__esModule', { value: true });
+/******/ 		};
+/******/ 	})();
+/******/ 	
+/************************************************************************/
+/******/ 	
+/******/ 	// startup
+/******/ 	// Load entry module and return exports
+/******/ 	// This entry module can't be inlined because the eval devtool is used.
+/******/ 	var __webpack_exports__ = __webpack_require__("./src/index.js");
+/******/ 	
+/******/ 	return __webpack_exports__;
+/******/ })()
+;
+});
