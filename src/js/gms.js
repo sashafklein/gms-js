@@ -96,8 +96,24 @@ class GMS {
   }
 
   updateState(newState, overwrite = false) {
-    this.state = overwrite ? newState : { ...this.state, ...newState };
-    this.render();
+    // If just changing secondsLeft, don't do full rerender
+    if (
+      newState.invoice &&
+      this.state.invoice &&
+      newState.invoice.secondsLeft > 0 &&
+      newState.invoice.secondsLeft !== this.state.secondsLeft &&
+      (this.state.stage === "INVOICE" || this.state.stage === "TIP_INVOICE")
+    ) {
+      const { invoice } = newState;
+      this.state = overwrite ? newState : { ...this.state, ...newState };
+
+      const expiryTextEl =
+        this.card.getElementsByClassName("gms-invoice-expiry")[0];
+      expiryTextEl.innerHTML = `Expires in ${invoice.secondsLeft}s`;
+    } else {
+      this.state = overwrite ? newState : { ...this.state, ...newState };
+      this.render();
+    }
   }
 
   close() {
@@ -138,19 +154,6 @@ class GMS {
 
     this.render();
   };
-
-  receiveInvoice(invoice) {
-    this.state.invoice = invoice;
-    this.expiryInterval = setInterval(() => {
-      const api = new API();
-      api.checkForPaymentAndUpdateApp();
-      this.state.invoice.expirySeconds -= 1;
-      if (this.state.invoice.expirySeconds <= 0) {
-        clearInterval(this.expiryInterval);
-      }
-      this.render();
-    }, 1000);
-  }
 
   _setCard(card) {
     this.card.innerHTML = "";

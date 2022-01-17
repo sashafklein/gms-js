@@ -3,7 +3,7 @@
 <html lang="en">
 
 <head>
-    <title>Code coverage report for src/js/api/Mock.js</title>
+    <title>Code coverage report for src/js/helpers/utils.js</title>
     <meta charset="utf-8" />
     <link rel="stylesheet" href="../../../prettify.css" />
     <link rel="stylesheet" href="../../../base.css" />
@@ -19,34 +19,34 @@
 <body>
 <div class='wrapper'>
     <div class='pad1'>
-        <h1><a href="../../../index.html">All files</a> / <a href="index.html">src/js/api</a> Mock.js</h1>
+        <h1><a href="../../../index.html">All files</a> / <a href="index.html">src/js/helpers</a> utils.js</h1>
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">80% </span>
+                <span class="strong">53.33% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>12/15</span>
+                <span class='fraction'>8/15</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">33.33% </span>
+                <span class="strong">37.5% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>3/9</span>
+                <span class='fraction'>3/8</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">62.5% </span>
+                <span class="strong">50% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>5/8</span>
+                <span class='fraction'>1/2</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">91.66% </span>
+                <span class="strong">53.33% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>11/12</span>
+                <span class='fraction'>8/15</span>
             </div>
         
             
@@ -61,7 +61,7 @@
             </div>
         </template>
     </div>
-    <div class='status-line high'></div>
+    <div class='status-line medium'></div>
     <pre><table class="coverage">
 <tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
 <a name='L2'></a><a href='#L2'>2</a>
@@ -97,74 +97,80 @@
 <a name='L32'></a><a href='#L32'>32</a>
 <a name='L33'></a><a href='#L33'>33</a>
 <a name='L34'></a><a href='#L34'>34</a>
-<a name='L35'></a><a href='#L35'>35</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">4x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">12x</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">12x</span>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">25x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">12x</span>
-<span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">2x</span>
-<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-yes">25x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">12x</span>
-<span class="cline-any cline-yes">6x</span>
-<span class="cline-any cline-yes">6x</span>
-<span class="cline-any cline-yes">6x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">25x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">3x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import BaseApi from "./base";
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">export const defaults = {
+  service: "STRIKE",
+  amount: 0,
+  note: "",
+  suggestTip: true,
+};
 &nbsp;
-const delay = process.env.NODE_ENV === "test" ? 0 : <span class="branch-1 cbranch-no" title="branch not covered" >800;</span>
+export const parseSettings = (element) =&gt; {
+  const settingsString = element.getAttribute("data-settings") || "{}";
 &nbsp;
-class Mock extends BaseApi {
-  _basePath = <span class="fstat-no" title="function not covered" >()</span> =&gt; <span class="cstat-no" title="statement not covered" >"mock.net";</span>
+  let settings;
+  try {
+    settings = JSON.parse(settingsString);
+  } catch (err) {
+<span class="cstat-no" title="statement not covered" >    throw new Error(</span>
+      `GimmeSats -- Failed to parse element settings. Make sure they are in JSON format.
+          Element: ${element}
+          Error: ${err}`
+    );
+  }
 &nbsp;
-  _mockInvoice = (overrides = <span class="branch-0 cbranch-no" title="branch not covered" >{})</span> =&gt; ({
-    lnInvoice: "ln-invoice",
-    secondsLeft: 56,
-    btcInvoice: "btc-invoice",
-    invoiceId: "invoice-id",
-    ...overrides,
-  });
+  return settings || <span class="branch-1 cbranch-no" title="branch not covered" >{};</span>
+};
 &nbsp;
-  getInvoice = (expired = <span class="branch-0 cbranch-no" title="branch not covered" >false)</span> =&gt; {
-    const invoice = this._mockInvoice({ secondsLeft: expired ? 0 : <span class="branch-1 cbranch-no" title="branch not covered" >45 </span>});
+export const stages = ["AMOUNT_INPUT", "NOTE_INPUT", "INVOICE", "PAID"];
 &nbsp;
-    return new Promise((resolve) =&gt; {
-      setTimeout(<span class="fstat-no" title="function not covered" >()</span> =&gt; {
-<span class="cstat-no" title="statement not covered" >        resolve(invoice);</span>
-      }, delay);
-    });
-  };
-&nbsp;
-  checkInvoice = (paid = <span class="branch-0 cbranch-no" title="branch not covered" >true)</span> =&gt; {
-    const invoice = this._mockInvoice({ stage: paid ? "PAID" : <span class="branch-1 cbranch-no" title="branch not covered" >"INVOICE" </span>});
-    return new Promise((resolve) =&gt; {
-      setTimeout(<span class="fstat-no" title="function not covered" >()</span> =&gt; <span class="cstat-no" title="statement not covered" >resolve(invoice),</span> delay);
-    });
-  };
-}
-&nbsp;
-export default Mock;
+export const isDescendant = <span class="fstat-no" title="function not covered" >(c</span>hild, parentClass) =&gt; {
+  let node = <span class="cstat-no" title="statement not covered" >child.parentNode;</span>
+<span class="cstat-no" title="statement not covered" >  while (node != null) {</span>
+<span class="cstat-no" title="statement not covered" >    if (node.classList &amp;&amp; node.classList.contains(parentClass)) {</span>
+<span class="cstat-no" title="statement not covered" >      return true;</span>
+    }
+<span class="cstat-no" title="statement not covered" >    node = node.parentNode;</span>
+  }
+<span class="cstat-no" title="statement not covered" >  return false;</span>
+};
 &nbsp;</pre></td></tr></table></pre>
 
                 <div class='push'></div><!-- for sticky footer -->

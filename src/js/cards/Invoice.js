@@ -17,10 +17,9 @@ const Invoice = () => {
   const invoice = tipInvoice || gms.state.invoice;
 
   const { secondsLeft, lnInvoice } = invoice;
-  InvoiceHelper.pollForInvoice(invoice);
 
   const expired = stage === "EXPIRED" || secondsLeft <= 0;
-
+  console.log({ expired }, stage, secondsLeft, invoice);
   // TODO: Toggle to Onchain
   const invoiceString = lnInvoice;
 
@@ -41,7 +40,9 @@ const Invoice = () => {
     >
       ${expired ? `<div class="gms-qr__expired"></div>` : `<canvas></canvas>`}
     </div>
-    <p>${expired ? "Expired" : `Expires in ${secondsLeft}s`}</p>
+    <p class="gms-invoice-expiry">${
+      expired ? "Expired" : `Expires in ${secondsLeft}s`
+    }</p>
   `;
 
   const makeActionObjects = () => [

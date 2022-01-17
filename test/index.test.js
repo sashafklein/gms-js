@@ -177,6 +177,7 @@ describe("basic functionality", () => {
           lnInvoice: "abc",
         };
       });
+
       it("displays an invoice, given an invoice", () => {
         gms.trigger(
           {},
@@ -205,6 +206,19 @@ describe("basic functionality", () => {
         gms.trigger(
           {},
           { stage: "EXPIRED", amount: 1, note: "Test note", invoice }
+        );
+
+        expect(get(card, "gms-qr__expired")).toBeTruthy();
+
+        expect(body("p").innerHTML).toEqual("Expired");
+        expect(actions("button").innerHTML).toEqual("Refresh");
+      });
+
+      it("displays expired state if secondsLeft are 0 or below", () => {
+        invoice.secondsLeft = 0;
+        gms.trigger(
+          {},
+          { stage: "INVOICE", amount: 1, note: "Test note", invoice }
         );
 
         expect(get(card, "gms-qr__expired")).toBeTruthy();

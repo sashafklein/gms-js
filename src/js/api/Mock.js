@@ -6,15 +6,15 @@ class Mock extends BaseApi {
   _basePath = () => "mock.net";
 
   _mockInvoice = (overrides = {}) => ({
-    lnInvoice: "ln-invoice",
-    secondsLeft: 56,
+    lnInvoice: "ln-invoice-nice-and-long-for-visual",
+    secondsLeft: Math.floor(Math.random() * 60),
     btcInvoice: "btc-invoice",
     invoiceId: "invoice-id",
     ...overrides,
   });
 
-  getInvoice = (expired = false) => {
-    const invoice = this._mockInvoice({ secondsLeft: expired ? 0 : 45 });
+  getInvoice = () => {
+    const invoice = this._mockInvoice();
 
     return new Promise((resolve) => {
       setTimeout(() => {

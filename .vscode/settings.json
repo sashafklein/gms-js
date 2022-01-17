@@ -1,6 +1,6 @@
 {
-  "files.exclude": {
-    "**/*.html": true,
-    "coverage/**": true
+  "search.exclude": {
+    "**.html": true,
+    "/coverage/**": true
   }
 }
