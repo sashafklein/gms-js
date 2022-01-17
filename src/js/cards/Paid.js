@@ -18,7 +18,7 @@ const Paid = () => {
       ></path>
     </svg>`,
     () => [
-      gms.settings.suggestTip && !gms.state.tipInvoice
+      gms.settings().suggestTip && !gms.state.tipInvoice
         ? {
             text: "Leave a Tip?",
             onClick: () => {

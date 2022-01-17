@@ -16,7 +16,8 @@ export default class Strike extends BaseApi {
       },
     };
 
-    const { data } = await axios.post(this._path(`users/${to}/pay`), body);
+    const path = this._path(`users/${to}/pay`);
+    const { data } = await axios.post(path, body);
 
     return Promise.resolve({
       lnInvoice: data.lnInvoice,

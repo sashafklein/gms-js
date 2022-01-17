@@ -8,7 +8,7 @@ export default class BaseApi {
   };
 
   _settings = () => {
-    return gms.settings;
+    return gms.settings();
   };
 
   _basePath = () => {

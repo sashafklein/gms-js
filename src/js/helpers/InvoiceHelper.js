@@ -1,49 +1,50 @@
-// If there's a tip invoice, regular invoice has been paid.
-const _isTip = () => !!gms.state.tipInvoice;
+class InvoiceHelper {
+  static _invoiceKey = () => (this._isTip() ? "tipInvoice" : "invoice");
 
-const _api = () => gms.api(_isTip() ? gms.tipService : undefined);
+  // If there's a tip invoice, regular invoice has been paid.
+  static _isTip = () => !!gms.state.tipInvoice;
 
-const _invoiceKey = () => (_isTip() ? "tipInvoice" : "invoice");
+  static _api = () => gms.api(this._isTip() ? gms.tipService : undefined);
 
-const pollForInvoice = (invoice) => {
-  if (!invoice) {
-    return;
-  }
+  static _pollAgainInOneSecond = (invoice) => {
+    setTimeout(() => {
+      this.pollForInvoice(invoice);
+    }, 1000);
+  };
 
-  _api()
-    .checkInvoice(invoice)
-    .then((invoice) => {
-      if (["EXPIRED", "PAID"].includes(invoice.status)) {
-        gms.updateState({
-          stage: invoice.status,
-          [_invoiceKey()]: invoice,
-        });
-      } else {
-        gms.updateState({
-          [_invoiceKey()]: invoice,
-        });
-        setTimeout(() => {
-          pollForInvoice(invoice);
-        }, 1000);
-      }
+  static pollForInvoice = (invoice) => {
+    if (!invoice) {
+      return;
+    }
+
+    this._api()
+      .checkInvoice(invoice)
+      .then((invoice) => {
+        if (["EXPIRED", "PAID"].includes(invoice.status)) {
+          gms.updateState({
+            stage: invoice.status,
+            [this._invoiceKey()]: invoice,
+          });
+        } else {
+          gms.updateState({
+            [this._invoiceKey()]: invoice,
+          });
+          this._pollAgainInOneSecond(invoice);
+        }
+      });
+  };
+
+  static getInvoiceAndPoll = (data) => {
+    const api = this._api();
+    const result = api.getInvoice(data);
+    result.then((invoice) => {
+      gms.updateState({
+        stage: this._isTip() ? "TIP_INVOICE" : "INVOICE",
+        [this._invoiceKey()]: invoice,
+      });
+      this.pollForInvoice(invoice);
     });
-};
-
-const getInvoiceAndPoll = (data) => {
-  const api = _api();
-  const result = api.getInvoice(data);
-  result.then((invoice) => {
-    gms.updateState({
-      stage: _isTip() ? "TIP_INVOICE" : "INVOICE",
-      [_invoiceKey()]: invoice,
-    });
-    pollForInvoice(invoice);
-  });
-};
-
-class InvoiceHelper {}
-
-InvoiceHelper.pollForInvoice = pollForInvoice;
-InvoiceHelper.getInvoiceAndPoll = getInvoiceAndPoll;
+  };
+}
 
 export default InvoiceHelper;

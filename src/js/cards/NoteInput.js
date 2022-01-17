@@ -3,10 +3,10 @@ import modalContent from "../pieces/modalContent";
 
 const NoteInput = () => {
   const { to, displayName, amountIsFixed, noteIsFixed, noteRequired } =
-    gms.settings;
+    gms.settings();
 
   const { amount } = gms.state;
-  const note = gms.state.note || gms.settings.note;
+  const note = gms.state.note || gms.settings().note;
 
   if (noteRequired && !note?.length) {
     throw new Error(
@@ -39,7 +39,7 @@ const NoteInput = () => {
           gms.updateState({ stage: "LOADING", note: input.value });
 
           InvoiceHelper.getInvoiceAndPoll({
-            to: gms.settings.to,
+            to: gms.settings().to,
             amount: gms.state.amount,
             note: input.value,
           });

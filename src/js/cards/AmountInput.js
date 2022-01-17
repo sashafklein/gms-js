@@ -1,10 +1,10 @@
 import modalContent from "../pieces/modalContent";
 
 const AmountInput = () => {
-  const { amountIsFixed, to, displayName } = gms.settings;
-  const amount = gms.state.amount || gms.settings.amount;
+  const { amountIsFixed, to, displayName } = gms.settings();
+  const amount = gms.state.amount || gms.settings().amount;
 
-  const missing = gms.requiredSettings.filter((key) => !gms.settings[key]);
+  const missing = gms.requiredSettings.filter((key) => !gms.settings()[key]);
   if (missing.length) {
     throw new Error(
       `GimmeSats -- Missing required settings: '${missing.join("', '")}'`

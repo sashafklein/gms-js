@@ -3,6 +3,7 @@ import "jest-canvas-mock";
 import InvoiceHelper from "../src/js/helpers/InvoiceHelper";
 
 import GMS from "../src/js/load";
+import { prepDocument } from "./helpers";
 
 const get = (el, selector, index = 0) => {
   return (
@@ -17,24 +18,9 @@ describe("basic functionality", () => {
   let root;
   let content;
   beforeEach(() => {
-    document.outerHTML = `
-      <html>
-        <body>
-        </body>
-      </html>
-    `;
-
-    content = document.createElement("div");
-    content.innerHTML = `
-      <button class="gms-button gms-button--bolt">Bolt here</button>
-      <button class="gms-button no-bolt">No bolt</button>
-      <button class="nothing">No onlick added</button>
-    `;
-    root = document.createElement("div");
-    root.id = "gms-root";
-    root.classList.add("gms-theme--dark-blue");
-    document.body.append(content);
-    document.body.prepend(root);
+    const { root: preppedRoot, content: preppedContent } = prepDocument();
+    root = preppedRoot;
+    content = preppedContent;
   });
 
   afterEach(() => {

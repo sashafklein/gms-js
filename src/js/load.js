@@ -1,8 +1,7 @@
 import GMS from "./bootstrap";
 
 window.onload = () => {
-  GMS.prepare();
-  GMS.setTriggers();
+  GMS.bootstrap();
 };
 
 export default GMS;

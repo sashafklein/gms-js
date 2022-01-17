@@ -6,7 +6,7 @@ const APIs = {
   MOCK: Mock,
 };
 
-const API = (service = gms.settings.service) => {
+const API = (service = gms.settings().service) => {
   const ApiClass = APIs[service];
   if (!ApiClass) {
     throw new Error(`GimmeSats -- No such API service: ${service}`);

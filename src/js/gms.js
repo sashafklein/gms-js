@@ -27,8 +27,15 @@ class GMS {
       ...defaults,
       ...globalSettings,
     };
-    this.settings = {};
+    this._localSettings = {};
     this.state = {};
+  }
+
+  settings() {
+    return {
+      ...this._globalSettings,
+      ...this._localSettings,
+    };
   }
 
   render() {
@@ -37,7 +44,7 @@ class GMS {
       this.root.onclick = undefined;
 
       if (this.isLocal) {
-        console.log("RENDERING", this.settings, this.state);
+        console.log("RENDERING", this.settings(), this.state);
       }
 
       const show = !!stage;
@@ -85,7 +92,7 @@ class GMS {
   }
 
   api(service) {
-    return API(service || gms.settings.service);
+    return API(service || gms.settings().service);
   }
 
   updateState(newState, overwrite = false) {
@@ -94,7 +101,7 @@ class GMS {
   }
 
   close() {
-    this.settings = {};
+    this._localSettings = {};
     this.state = {};
     this.render();
   }
@@ -126,7 +133,7 @@ class GMS {
       triggerState.note = settings.note;
     }
 
-    this.settings = settings;
+    this._localSettings = triggerSettings;
     this.state = triggerState;
 
     this.render();

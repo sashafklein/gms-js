@@ -5,14 +5,14 @@ import modalContent from "../pieces/modalContent";
 import InvoiceHelper from "../helpers/InvoiceHelper";
 
 const Invoice = () => {
-  const { displayName, to } = gms.settings;
+  const { displayName, to } = gms.settings();
   const { stage, tipInvoice, amount: stateAmount, note: stateNote } = gms.state;
-  const setAmount = stateAmount || gms.settings.amount;
+  const setAmount = stateAmount || gms.settings().amount;
   const amount = tipInvoice
     ? Math.max(0.05 * setAmount, gms.tipMin)
     : setAmount;
 
-  const note = tipInvoice ? gms.tipNote : stateNote || gms.settings.note;
+  const note = tipInvoice ? gms.tipNote : stateNote || gms.settings().note;
 
   const invoice = tipInvoice || gms.state.invoice;
 
