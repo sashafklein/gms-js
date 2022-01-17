@@ -95,7 +95,7 @@ describe("basic functionality", () => {
     beforeEach(() => {
       bootstrap(baseSettings);
     });
-    describe("amount input", () => {
+    describe("AMOUNT_INPUT card", () => {
       it("renders an amount input, with appropriate button states", () => {
         clickTriggerButton();
         const amountInput = get(card, "gms-amount-input");

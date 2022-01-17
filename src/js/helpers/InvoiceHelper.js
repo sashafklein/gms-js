@@ -6,6 +6,8 @@ class InvoiceHelper {
 
   static _api = () => gms.api(this._isTip() ? gms.tipService : undefined);
 
+  static _invoiceState = (invoice) => ({ [this._invoiceKey()]: invoice });
+
   static _pollAgainInOneSecond = (invoice) => {
     setTimeout(() => {
       this.pollForInvoice(invoice);
@@ -21,14 +23,13 @@ class InvoiceHelper {
       .checkInvoice(invoice)
       .then((invoice) => {
         if (["EXPIRED", "PAID"].includes(invoice.status)) {
-          gms.updateState({
+          const state = {
+            ...this._invoiceState(invoice),
             stage: invoice.status,
-            [this._invoiceKey()]: invoice,
-          });
+          };
+          gms.updateState(state);
         } else {
-          gms.updateState({
-            [this._invoiceKey()]: invoice,
-          });
+          gms.updateState(this._invoiceState(invoice));
           this._pollAgainInOneSecond(invoice);
         }
       });
@@ -40,7 +41,7 @@ class InvoiceHelper {
     result.then((invoice) => {
       gms.updateState({
         stage: this._isTip() ? "TIP_INVOICE" : "INVOICE",
-        [this._invoiceKey()]: invoice,
+        ...this._invoiceState(invoice),
       });
       this.pollForInvoice(invoice);
     });
