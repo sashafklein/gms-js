@@ -1,3 +1,15 @@
+export const expirationTimer = (secondsLeft) => {
+  let time = `${secondsLeft}s`;
+
+  if (secondsLeft > 60) {
+    const mins = parseInt(secondsLeft / 60.0);
+    const secs = secondsLeft - mins * 60;
+    time = `${mins}m ${secs}s`;
+  }
+
+  return `Expires in ${time}`;
+};
+
 class InvoiceHelper {
   static _invoiceKey = () => (this._isTip() ? "tipInvoice" : "invoice");
 
@@ -27,24 +39,37 @@ class InvoiceHelper {
             ...this._invoiceState(invoice),
             stage: invoice.status,
           };
+          console.log("UPDATING POST PAYMENT", state);
           gms.updateState(state);
         } else {
-          gms.updateState(this._invoiceState(invoice));
+          gms.updateState(this._invoiceState(invoice), {
+            selector: ".gms-invoice-expiry",
+            innerHTML: expirationTimer(invoice.secondsLeft),
+          });
           this._pollAgainInOneSecond(invoice);
         }
+      })
+      .catch((error) => {
+        console.error(error);
+        gms.updateState({ stage: "ERROR" });
       });
   };
 
   static getInvoiceAndPoll = (data) => {
     const api = this._api();
     const result = api.getInvoice(data);
-    result.then((invoice) => {
-      gms.updateState({
-        stage: this._isTip() ? "TIP_INVOICE" : "INVOICE",
-        ...this._invoiceState(invoice),
+    result
+      .then((invoice) => {
+        gms.updateState({
+          stage: this._isTip() ? "TIP_INVOICE" : "INVOICE",
+          ...this._invoiceState(invoice),
+        });
+        this.pollForInvoice(invoice);
+      })
+      .catch((error) => {
+        console.error(error);
+        gms.updateState({ stage: "ERROR" });
       });
-      this.pollForInvoice(invoice);
-    });
   };
 }
 

@@ -42,7 +42,7 @@ const AmountInput = () => {
         disabled: !amount,
         onClick: () =>
           gms.updateState({
-            amount: parseFloat(input.value),
+            amount: parseFloat(input ? input.value : amount),
             stage: gms.nextStage(),
           }),
       },
@@ -73,7 +73,9 @@ const AmountInput = () => {
     primary.disabled = !(parseFloat(cleaned) > 0);
   };
 
-  input.oninput = handleNumInput;
+  if (input) {
+    input.oninput = handleNumInput;
+  }
   return content;
 };
 

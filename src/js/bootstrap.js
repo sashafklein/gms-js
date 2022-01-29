@@ -26,34 +26,10 @@ GMS.prepare = () => {
     throw new Error("GimmeSats -- No element found with ID 'gms-root'.");
   }
 
-  const darkThemes = ["dark-blue"];
-  const lightThemes = ["white"];
-  const themes = [...darkThemes, ...lightThemes];
-  const classes = [];
-
   if (root.classList.contains("gms-root--bootstrapped")) {
     window.gms = window.gms || GMS(root, globalSettings);
     return;
   }
-
-  root.classList.forEach((klass) => {
-    classes.push(klass);
-  });
-
-  const theme = classes.filter(
-    (klass) =>
-      klass.includes("gms-theme--") && themes.includes(klass.split("--")[1])
-  )[0];
-
-  if (!theme) {
-    throw new Error("GimmeSats -- Root element requires a valid theme.");
-  }
-
-  root.classList.add(
-    `gms-theme--is-${
-      darkThemes.includes(theme.split("--")[1]) ? "dark" : "light"
-    }`
-  );
 
   if (root.children.length > 1) {
     throw new Error(
@@ -85,6 +61,7 @@ GMS.setTriggers = () => {
 
     trigger.onclick = () => {
       const settings = parseSettings(trigger);
+      console.log("SETTINGS", settings);
       window.gms.trigger(settings);
     };
 

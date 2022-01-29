@@ -2,7 +2,7 @@ import QR from "qrcode";
 
 import modalContent from "../pieces/modalContent";
 
-import InvoiceHelper from "../helpers/InvoiceHelper";
+import InvoiceHelper, { expirationTimer } from "../helpers/InvoiceHelper";
 
 const Invoice = () => {
   const { displayName, to } = gms.settings();
@@ -19,7 +19,9 @@ const Invoice = () => {
   const { secondsLeft, lnInvoice } = invoice;
 
   const expired = stage === "EXPIRED" || secondsLeft <= 0;
-  console.log({ expired }, stage, secondsLeft, invoice);
+
+  gms.log("INVOICE", { expired, note, invoice, tipInvoice, amount });
+
   // TODO: Toggle to Onchain
   const invoiceString = lnInvoice;
 
@@ -30,18 +32,11 @@ const Invoice = () => {
   `;
 
   const bodyContent = `
-    <div
-      class="gms-qr"
-      ${
-        // Uncomment for header-click shortcut to expiry
-        // onClick={() => actions.updateState({ stage: EXPIRED })
-        ""
-      }
-    >
+    <div class="gms-qr">
       ${expired ? `<div class="gms-qr__expired"></div>` : `<canvas></canvas>`}
     </div>
     <p class="gms-invoice-expiry">${
-      expired ? "Expired" : `Expires in ${secondsLeft}s`
+      expired ? "Expired" : expirationTimer(secondsLeft)
     }</p>
   `;
 
@@ -49,19 +44,11 @@ const Invoice = () => {
     {
       onClick: expired
         ? () =>
-            InvoiceHelper.getInvoiceAndPoll(
-              tipInvoice
-                ? {
-                    to: gms.tipTo,
-                    amount: stateAmount * 0.05,
-                    note: gms.tipNote,
-                  }
-                : {
-                    to: gms.settings.to,
-                    amount: stateAmount,
-                    note: gms.note.amount,
-                  }
-            )
+            InvoiceHelper.getInvoiceAndPoll({
+              to: tipInvoice ? gms.tipTo : gms.settings.to,
+              amount: amount,
+              note,
+            })
         : () => navigator.clipboard.writeText(invoiceString),
       text: expired ? "Refresh" : "Copy",
     },
@@ -88,13 +75,6 @@ const Invoice = () => {
         throw new Error(`GimmeSats - QR failed to render.`);
       }
     });
-
-    // TODO: Remove. Simulates payment on QR click
-    if (window.location.href.includes("http://localhost:3000")) {
-      canvas.onclick = () => {
-        gms.updateState({ stage: "PAID" });
-      };
-    }
   }
 
   return content;

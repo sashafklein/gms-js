@@ -22,7 +22,10 @@ const Paid = () => {
         ? {
             text: "Leave a Tip?",
             onClick: () => {
-              const tipAmount = Math.max(gms.state.amount * 0.05, 0.05);
+              const tipAmount = Math.max(
+                gms.state.amount * gms.tipPercentage,
+                gms.tipMin
+              );
               gms.updateState({ stage: "LOADING", tipInvoice: {}, tipAmount });
               InvoiceHelper.getInvoiceAndPoll({
                 to: gms.tipTo,

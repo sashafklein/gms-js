@@ -16,6 +16,8 @@ export default class Strike extends BaseApi {
       },
     };
 
+    gms.log("STRIKE GET INVOICE", body);
+
     const path = this._path(`users/${to}/pay`);
     const { data } = await axios.post(path, body);
 

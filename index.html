@@ -9,14 +9,37 @@
     <link rel="manifest" href="" />
     <link rel="icon" href="/favicon.ico">
     <title>Gimme Sats Demo</title>
+    <script>
+      window.onload = () => {
+        const checkboxes = document.getElementsByClassName('checkbox-container');
+        for (let i = 0; i < checkboxes.length; i++) {
+          const cb = checkboxes[i];
+          const button = document.getElementById('editable-button');
+          cb.onclick = () => {
+            cb.classList.toggle('ticked');
+            const applying = cb.classList.contains('ticked');
+            const settings = JSON.parse(cb.getAttribute('data-settings'));
+            const setting = Object.keys(settings)[0]
+            const buttonSettings = JSON.parse(button.getAttribute('data-settings'))
+
+            if (setting === 'theme') {
+              button.classList.toggle(`gms-button--theme-${settings[setting]})`);
+            }
+
+            buttonSettings[setting] = applying ? settings[setting] : undefined;
+            button.setAttribute('data-settings', JSON.stringify(buttonSettings))
+          }
+        }
+      }
+    </script>
     <script src="build/index.js"></script>
     <link rel="stylesheet" href="index.css">
   </head>
 
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="gms-root" class="gms-theme--dark-blue" data-settings='{ "to": "sasha" }'></div>
-    <div class="gms-theme--dark-blue gms-theme--is-dark">
+    <div id="gms-root" data-settings='{ "to": "sasha", "theme": "dark-blue" }'></div>
+    <div>
       <header>
         <a class="logo" href="https://gimmesats.com">
           <h1>Gimme Sats</h1>
@@ -31,7 +54,7 @@
           </h2>
           <div class="content">
             <h3 style="margin-bottom: 40px">Give it a try!</h3>
-            <button class="gms-button gms-button--bolt">Gimme Sats!</button>
+            <button class="gms-button gms-button--bolt gms-button--dark-blue">Gimme Sats!</button>
           </div>
         </div>
       </section>
@@ -45,9 +68,30 @@
               Tick the boxes to edit component options and customize the
               payment flow for the below GimmeSats button:
             </h3>
-            <div style='padding: "20px 0"; margin-bottom: 20px'>
+            <div style="padding: 20px 0px; margin-bottom: 20px;">
+              <div class="checkbox-container" data-settings='{ "amount": 20 }'>
+                <div class="checkbox"></div>amount <span>(Prefill amount to $20.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "note": "Prefilled for you!"}'>
+                <div class="checkbox"></div>note <span>(Set pre-filled note.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "amountIsFixed": true }'>
+                <div class="checkbox"></div>amountIsFixed <span>(If amount is unchecked, will throw error.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "noteIsFixed": true }'>
+                <div class="checkbox"></div>noteIsFixed <span>(If note is unchecked, will be blank.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "theme": "white" }'>
+                <div class="checkbox"></div>theme <span>(Set white theme.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "to": "niko" }'>
+                <div class="checkbox"></div>to <span>(Change recipient.)</span>
+              </div>
+              <div class="checkbox-container" data-settings='{ "displayName": "My Friend" }'>
+                <div class="checkbox"></div>displayName <span>(Customize recipient text.)</span>
+              </div>
             </div>
-            <button class="gms-button gms-button--light gms-button--bolt" data-settings='{ "to": "niko" }'>Tip for
+            <button class="gms-button gms-button--light gms-button--bolt" id="editable-button" data-settings='{ "to": "kuba" }'>Tip for
               GimmeSats!</button>
           </div>
         </div>

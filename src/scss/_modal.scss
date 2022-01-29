@@ -39,7 +39,8 @@
     }
   }
 
-  &.gms-theme--is-dark .gms-modal-card {
+  // Card-specific stles override global root styles
+  .gms-modal-card.gms-theme--is-dark {
     h1,
     h2,
     h3,
@@ -53,11 +54,11 @@
     }
   }
 
-  &.gms-theme--dark-blue .gms-modal-card {
+  .gms-modal-card.gms-theme--dark-blue {
     background-color: $dark-blue-dark;
   }
 
-  &.gms-theme--white .gms-modal-card {
+  .gms-modal-card.gms-theme--white {
     background-color: white;
   }
 }

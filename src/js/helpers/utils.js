@@ -1,5 +1,5 @@
 export const defaults = {
-  service: "MOCK",
+  service: "STRIKE",
   amount: 0,
   note: "",
   suggestTip: true,

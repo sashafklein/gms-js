@@ -81,6 +81,12 @@ a.logo:hover {
   margin-bottom: 40px;
 }
 
+.checkbox-container span {
+  margin-left: 10px;
+  font-weight: lighter;
+  font-style: italic;
+}
+
 .checkbox {
   width: 20px;
   height: 20px;
@@ -89,7 +95,7 @@ a.logo:hover {
   border-radius: 5px;
 }
 
-.checkbox.ticked {
+.checkbox-container.ticked .checkbox {
   background-color: white;
 }
 

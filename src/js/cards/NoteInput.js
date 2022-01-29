@@ -2,17 +2,10 @@ import InvoiceHelper from "../helpers/InvoiceHelper";
 import modalContent from "../pieces/modalContent";
 
 const NoteInput = () => {
-  const { to, displayName, amountIsFixed, noteIsFixed, noteRequired } =
-    gms.settings();
+  const { to, displayName, amountIsFixed, noteIsFixed } = gms.settings();
 
   const { amount } = gms.state;
   const note = gms.state.note || gms.settings().note;
-
-  if (noteRequired && !note?.length) {
-    throw new Error(
-      "GimmeSats -- Bad settings: 'noteRequired' was set to true with empty note."
-    );
-  }
 
   const bodyContent = `
     ${
@@ -33,18 +26,19 @@ const NoteInput = () => {
 
   const makeActionObjects = ({ body }) => {
     const input = body.getElementsByTagName("textarea")[0];
+    const value = input ? input.value : note;
     return [
       {
         onClick: () => {
-          gms.updateState({ stage: "LOADING", note: input.value });
+          gms.updateState({ stage: "LOADING", note: value });
 
           InvoiceHelper.getInvoiceAndPoll({
             to: gms.settings().to,
             amount: gms.state.amount,
-            note: input.value,
+            note: value,
           });
         },
-        disabled: noteRequired && !input.value.length,
+        disabled: !value.length,
         text: "Get invoice",
       },
       {
@@ -69,7 +63,9 @@ const NoteInput = () => {
     const primary = actions.children[0];
     primary.disabled = !target.value.length;
   };
-  input.oninput = handleInput;
+  if (input) {
+    input.oninput = handleInput;
+  }
 
   return content;
 };
