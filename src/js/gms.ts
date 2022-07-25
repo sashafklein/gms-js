@@ -7,11 +7,19 @@ import ErrorCard from "./cards/ErrorCard";
 import Paid from "./cards/Paid";
 import Loader from "./cards/Loader";
 
+import { Settings, State, SpotOptions } from "./types";
+
+declare global {
+  interface Window {
+    gmsDebug?: any;
+    gms?: any;
+  }
+}
+
 class GMS {
   isLocal = window.location.href.includes("localhost:3000");
 
   requiredSettings = ["to", "service"];
-  expiryInterval;
 
   tipPercentage = 0.05;
   tipMin = 0.01; // Cents
@@ -19,6 +27,16 @@ class GMS {
   tipTo = "sasha";
   tipDisplayName = "GimmeSats Devs";
   tipNote = `${this.tipPercentage}% of charge (or 1 cent min).`;
+
+  root?: HTMLElement;
+  card?: HTMLElement;
+  _globalSettings: Settings = {};
+  _localSettings: Settings = {};
+  state: State = {};
+
+  static prepare?: () => void = null;
+  static bootstrap?: () => void = null;
+  static setTriggers?: () => void = null;
 
   constructor(root, globalSettings) {
     this.root = root;
@@ -31,7 +49,7 @@ class GMS {
     this.state = {};
   }
 
-  settings() {
+  settings(): Settings {
     return {
       ...this._globalSettings,
       ...this._localSettings,
@@ -39,10 +57,10 @@ class GMS {
   }
 
   api(service) {
-    return API(service || gms.settings().service);
+    return API(service || this.settings().service);
   }
 
-  updateState(newState, spotOptions) {
+  updateState(newState: State, spotOptions: SpotOptions) {
     this.debug({ newState });
 
     this.state = { ...this.state, ...newState };
@@ -75,22 +93,12 @@ class GMS {
     return prev;
   }
 
-  trigger = (
-    triggerSettings = {},
-    triggerState = { stage: "AMOUNT_INPUT" }
-  ) => {
+  trigger = (triggerSettings: Settings = {}, triggerState: State = {}) => {
     this.log("TRIGGERING", { triggerSettings, triggerState });
 
-    const settings = {
-      ...this._globalSettings,
-      ...triggerSettings,
-    };
+    triggerState.stage ||= triggerState.stage || "AMOUNT_INPUT";
 
-    if (settings.amountFixed) {
-      triggerState.amount = settings.amount;
-    }
-
-    triggerState.note = settings.note || "Tip";
+    triggerState.note = triggerState.note || "Tip";
 
     this._localSettings = triggerSettings;
     this.state = triggerState;
@@ -178,14 +186,15 @@ class GMS {
     element.innerHTML = innerHTML;
   }
 
-  _select(selector) {
-    if (selector[0] === ".") {
-      return this.card.getElementsByClassName(selector.slice(1))[0];
-    } else if (selector[0] === "#") {
-      return this.card.getElementById(selector.slice(1));
-    } else {
-      throw new Error(`GimmeSats -- Bad selector. Must begin with . or #.`);
+  _select(classSelector) {
+    const element = this.card.getElementsByClassName(classSelector.slice(1))[0];
+    if (!element) {
+      throw new Error(
+        `GimmeSats -- No element found with classSelector '${classSelector}'.`
+      );
     }
+
+    return element;
   }
 
   log(...args) {

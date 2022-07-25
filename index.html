@@ -19,15 +19,20 @@
             cb.classList.toggle('ticked');
             const applying = cb.classList.contains('ticked');
             const settings = JSON.parse(cb.getAttribute('data-settings'));
-            const setting = Object.keys(settings)[0]
-            const buttonSettings = JSON.parse(button.getAttribute('data-settings'))
+            const states = JSON.parse(cb.getAttribute('data-state'));
+            const setting = Object.keys(settings)[0];
+            const state = Object.keys(state)[0];
+            const buttonSettings = JSON.parse(button.getAttribute('data-settings'));
+            const buttonStates = JSON.parse(button.getAttribute('data-settings'));
 
             if (setting === 'theme') {
               button.classList.toggle(`gms-button--theme-${settings[setting]})`);
             }
 
             buttonSettings[setting] = applying ? settings[setting] : undefined;
+            buttonStates[state] = applying ? states[state] : undefined;
             button.setAttribute('data-settings', JSON.stringify(buttonSettings))
+            button.setAttribute('data-state', JSON.stringify(buttonStates))
           }
         }
       }
@@ -69,10 +74,10 @@
               payment flow for the below GimmeSats button:
             </h3>
             <div style="padding: 20px 0px; margin-bottom: 20px;">
-              <div class="checkbox-container" data-settings='{ "amount": 20 }'>
+              <div class="checkbox-container" data-state='{ "amount": 20 }'>
                 <div class="checkbox"></div>amount <span>(Prefill amount to $20.)</span>
               </div>
-              <div class="checkbox-container" data-settings='{ "note": "Prefilled for you!"}'>
+              <div class="checkbox-container" data-state='{ "note": "Prefilled for you!"}'>
                 <div class="checkbox"></div>note <span>(Set pre-filled note.)</span>
               </div>
               <div class="checkbox-container" data-settings='{ "amountIsFixed": true }'>

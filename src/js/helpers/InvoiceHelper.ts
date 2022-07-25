@@ -1,8 +1,10 @@
-export const expirationTimer = (secondsLeft) => {
+import { gms, Invoice, InvoiceRequest } from "../types";
+
+export const expirationTimer = (secondsLeft: number) => {
   let time = `${secondsLeft}s`;
 
   if (secondsLeft > 60) {
-    const mins = parseInt(secondsLeft / 60.0);
+    const mins = Math.floor(secondsLeft / 60.0);
     const secs = secondsLeft - mins * 60;
     time = `${mins}m ${secs}s`;
   }
@@ -18,22 +20,24 @@ class InvoiceHelper {
 
   static _api = () => gms.api(this._isTip() ? gms.tipService : undefined);
 
-  static _invoiceState = (invoice) => ({ [this._invoiceKey()]: invoice });
+  static _invoiceState = (invoice: Invoice) => ({
+    [this._invoiceKey()]: invoice,
+  });
 
-  static _pollAgainInOneSecond = (invoice) => {
+  static _pollAgainInOneSecond = (invoice: Invoice) => {
     setTimeout(() => {
       this.pollForInvoice(invoice);
     }, 1000);
   };
 
-  static pollForInvoice = (invoice) => {
+  static pollForInvoice = (invoice: Invoice) => {
     if (!invoice) {
       return;
     }
 
     this._api()
       .checkInvoice(invoice)
-      .then((invoice) => {
+      .then((invoice: Invoice) => {
         if (["EXPIRED", "PAID"].includes(invoice.status)) {
           const state = {
             ...this._invoiceState(invoice),
@@ -43,7 +47,7 @@ class InvoiceHelper {
           gms.updateState(state);
         } else {
           gms.updateState(this._invoiceState(invoice), {
-            selector: ".gms-invoice-expiry",
+            selector: "gms-invoice-expiry",
             innerHTML: expirationTimer(invoice.secondsLeft),
           });
           this._pollAgainInOneSecond(invoice);
@@ -55,7 +59,7 @@ class InvoiceHelper {
       });
   };
 
-  static getInvoiceAndPoll = (data) => {
+  static getInvoiceAndPoll = (data: InvoiceRequest) => {
     const api = this._api();
     const result = api.getInvoice(data);
     result

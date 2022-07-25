@@ -1,3 +1,5 @@
+import { gms, InvoiceRequest } from "../types";
+
 export default class BaseApi {
   static secondsToExpireEarly = 2;
 
@@ -23,13 +25,13 @@ export default class BaseApi {
   };
 
   // eslint-disable-next-line
-  getInvoice = (data = {}) => {
+  getInvoice = (data: InvoiceRequest) => {
     this._implementError("getInvoice");
     return Promise.resolve(this._invoice());
   };
 
   // eslint-disable-next-line
-  checkForPayment = (data = {}) => {
+  checkForPayment = (data: InvoiceRequest) => {
     this._implementError("checkForPayment");
     return Promise.resolve(this._invoice());
   };

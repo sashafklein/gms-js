@@ -1,5 +1,5 @@
 import GMS from "./gms";
-import { parseSettings } from "./helpers/utils";
+import { parseData } from "./helpers/utils";
 
 const bolt = (width = 12) => `
   <svg
@@ -20,14 +20,14 @@ const bolt = (width = 12) => `
 GMS.prepare = () => {
   const root = document.getElementById("gms-root");
 
-  const globalSettings = parseSettings(root);
+  const globalSettings = parseData("settings", root);
 
   if (!root) {
     throw new Error("GimmeSats -- No element found with ID 'gms-root'.");
   }
 
   if (root.classList.contains("gms-root--bootstrapped")) {
-    window.gms = window.gms || GMS(root, globalSettings);
+    window.gms = window.gms || new GMS(root, globalSettings);
     return;
   }
 
@@ -57,12 +57,12 @@ GMS.setTriggers = () => {
   const triggers = document.getElementsByClassName("gms-button");
 
   for (let i = 0; i < triggers.length; i++) {
-    const trigger = triggers[i];
+    const trigger = triggers[i] as HTMLElement;
 
     trigger.onclick = () => {
-      const settings = parseSettings(trigger);
-      console.log("SETTINGS", settings);
-      window.gms.trigger(settings);
+      const settings = parseData("settings", trigger);
+      const state = parseData("state", trigger);
+      window.gms.trigger(settings, state);
     };
 
     const classes = trigger.classList;

@@ -1,10 +1,11 @@
 import axios from "axios";
 import BaseApi from "./base";
+import { gms, InvoiceRequest } from "../types";
 
 export default class Strike extends BaseApi {
   _basePath = () => "https://api.zaphq.io/api/v0.4/public";
 
-  getInvoice = async ({ to, note, amount }) => {
+  getInvoice = async ({ to, note, amount }: InvoiceRequest) => {
     const includeOnchainAddress = amount >= 10;
 
     const body = {
